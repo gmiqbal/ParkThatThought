@@ -1,0 +1,6 @@
+parking_lot_data/
+music/
+__pycache__/
+*.pyc
+*.bak
+*.new
