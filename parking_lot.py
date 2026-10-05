@@ -82,11 +82,12 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Park stray thoughts, files and images. Get back to work."
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 APP_AUTHOR = "G M Iqbal Mahmud"
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
-RELEASES_URL = GITHUB_URL + "/releases/latest"   # where the exe updates itself from: the newest installer
+LATEST_API = "https://api.github.com/repos/gmiqbal/ParkThatThought/releases/latest"   # the exe's Restart / update
+SETUP_PATH = Path(os.environ.get("TEMP", str(APP_DIR))) / "ParkThatThought-Setup.exe"   # newer installer lands here
 COFFEE_URL = "https://buymeacoffee.com/gmiqbal"   # About > Buy me a coffee
 RESCUE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkingLotRescue"
 RESCUE_FILE = RESCUE_DIR / "tasks.rescue.json"
@@ -15151,9 +15152,10 @@ class HotkeyDialog(QDialog):
 # ---------------------------------------------------------------- updates
 def update_script(path=None):
     """Restart / update: swap in the newest parking_lot.py from GitHub. Only this file changes; notes stay.
-    A git checkout (someone working on the code) is left alone. Returns updated, current, dev or failed."""
+    A git checkout (someone working on the code) is left alone. Returns updated, current, dev or failed.
+    The installed exe can't swap its own code: it downloads a newer release's installer instead (installer)."""
     if FROZEN:
-        return "exe"                    # an installed exe can't swap its own code; restart() opens the download page
+        return update_exe()
     path = Path(path or __file__).resolve()
     if (path.parent / ".git").exists():
         return "dev"
@@ -15170,6 +15172,34 @@ def update_script(path=None):
         shutil.copy2(path, path.with_name(path.name + ".bak"))   # the previous version, in case
         os.replace(tmp, path)
         return "updated"
+    except Exception as e:
+        log_error(f"update failed: {e}")
+        return "failed"
+
+
+def _version(text):
+    return tuple(int(n) for n in re.findall(r"\d+", text))
+
+
+def update_exe():
+    """If GitHub's latest release is newer than this exe, save its installer to SETUP_PATH. restart() runs it
+    silently; it replaces the program files only (notes live in APP_DIR, untouched) and starts the app again.
+    Returns installer, current or failed."""
+    try:
+        req = urllib.request.Request(LATEST_API, headers={"User-Agent": "ParkThatThought"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            rel = json.load(r)
+        if _version(rel["tag_name"]) <= _version(APP_VERSION):
+            return "current"
+        url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == SETUP_PATH.name)
+        if not url.startswith(GITHUB_URL + "/releases/download/"):
+            raise ValueError(f"unexpected download link {url}")
+        with urllib.request.urlopen(url, timeout=30) as r:
+            data = r.read()
+        if not data.startswith(b"MZ") or len(data) < 1_000_000:
+            raise ValueError("download is not the installer")
+        SETUP_PATH.write_bytes(data)
+        return "installer"
     except Exception as e:
         log_error(f"update failed: {e}")
         return "failed"
@@ -15438,20 +15468,36 @@ def main():
         """Start a fresh copy (it loads the current file) and make sure this one really goes: the new copy is
         told to take over (--replace), and this one quits, with a hard exit as a backstop if something
         (a menu's own event loop, a stuck thread) keeps it alive."""
+        if restarting:
+            return
+        restarting.append(True)
         store.flush_on_quit()
-        toast("Checking for updates...")
-        app.processEvents()
-        status = update_script()
+        toast("Checking for updates...", 30000)
+        result = []      # the exe's update is a 40 MB download: fetch it off the UI thread
+        threading.Thread(target=lambda: result.append(update_script()), daemon=True).start()
+
+        def wait():
+            if not result:
+                return QTimer.singleShot(200, wait)
+            relaunch(result[0])
+        wait()
+
+    restarting = []
+
+    def relaunch(status):
+        if status == "installer":   # it closes this copy, swaps the program files and starts the app again
+            if QProcess.startDetached(str(SETUP_PATH), ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]):
+                return hard_quit()
+            status = "failed"
         exe = Path(sys.executable)
         pyw = exe.with_name("pythonw.exe")
         if IS_WIN and pyw.exists() and not FROZEN:
             exe = pyw  # no console window
-        if status == "exe":
-            QDesktopServices.openUrl(QUrl(RELEASES_URL))
         args = [] if FROZEN else [str(Path(__file__).resolve())]
         if QProcess.startDetached(str(exe), args + ["--replace", f"--update={status}"], str(APP_DIR)):
             hard_quit()
         else:
+            restarting.clear()
             toast("Couldn't restart. Quit, then open Park That Thought again.")
 
     def hard_quit():
@@ -16016,8 +16062,7 @@ def main():
         lock.unlock()
     app.aboutToQuit.connect(on_quit)
     said = {"--update=updated": "Updated to the newest version.", "--update=current": "You have the newest version.",
-            "--update=failed": "Couldn't reach GitHub, so no update this time.",
-            "--update=exe": "To update, run the newest installer from the page that just opened. Notes stay."}
+            "--update=failed": "Couldn't reach GitHub, so no update this time."}
     for arg in sys.argv:
         if arg in said:
             QTimer.singleShot(1500, lambda m=said[arg]: toast(m))

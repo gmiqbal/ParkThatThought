@@ -29,23 +29,18 @@ It is not a full task manager. There's no account, no cloud sync and no phone ap
 ## Install (about 2 minutes)
 
 1. Download **[ParkThatThought-Setup.exe](https://github.com/gmiqbal/ParkThatThought/releases/latest/download/ParkThatThought-Setup.exe)** (about 40 MB).
-2. Open it. Windows may say "Windows protected your PC" because the app isn't signed (signing costs money every year). Click **More info** > **Run anyway**.
-3. A cloud appears on the right edge of your screen. The installer adds Start menu, desktop and startup shortcuts. No admin rights and no Python needed.
+2. Open it.
+3. **Windows will most likely show a blue box: "Windows protected your PC".** This is expected. Click **More info**, then **Run anyway**.
+4. A cloud appears on the right edge of your screen. That's it.
 
-**Or, if you already use Python:** paste this in Command Prompt. Some antivirus apps flag any "download and run" command line like this one, even a harmless one, so the exe is the easier choice.
+No admin rights and no Python needed. It adds Park That Thought to the Start menu, your desktop and startup, so it's there every time you log in. If the cloud ever goes missing, double-click the desktop icon.
 
-```
-powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | Out-String | iex"
-```
-
-What the command line does (you can [read it here](install.ps1), it's short):
-
-1. Finds Python 3.9 or newer. If you don't have it, installs Python 3.12 with winget (Windows' own app installer).
-2. Puts the app in `%LOCALAPPDATA%\ParkThatThought` with its own private Python environment, and installs its two libraries, PySide6 and pynput (about 200 MB the first time).
-3. Adds **Park That Thought** to the Start menu, startup and your desktop, so it's there every time you log in. If the cloud ever goes missing, double-click the desktop icon to bring it back.
-4. Starts the app.
-
-No admin rights needed. Running the same line again updates the app and never touches your notes.
+> **Why the blue box, and is it safe?**
+> Windows shows it for any app that isn't "signed". Signing needs a paid certificate, renewed every year, that small free projects usually skip. It says nothing about what the app does.
+> - The whole app is open source: one file, [parking_lot.py](parking_lot.py), that anyone can read.
+> - It never asks for admin rights. It installs only into your own user folder.
+> - Your notes never leave your PC. There's no account and no server.
+> - The installer is built from this code and attached to each [release](https://github.com/gmiqbal/ParkThatThought/releases). Windows Defender scans it clean.
 
 ## A quick tour
 
@@ -158,27 +153,20 @@ Everything works from the keyboard.
 - **Your notes stay on your PC**, in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`. No account, no server, no tracking.
 - **Hidden from screen share and screenshots** by default (Zoom, Teams, Meet, OBS, Snipping Tool). You can turn this off.
 - **App tracking during focus rounds** (on by default, turn it off in Settings > Focus & breaks) notes which app is in front so the end-of-round card can ask which ones distracted you. It never leaves your PC.
-- **The internet is used only when you ask for it:** installing, **Restart / update**, and, if you turn them on, Google Calendar and phone alerts through ntfy.sh (timer messages only, never your notes).
+- **The internet is used only when you ask for it:** downloading, **Restart / update**, and, if you turn them on, Google Calendar and phone alerts through ntfy.sh (timer messages only, never your notes).
 - **Copy for AI** only copies text to your clipboard. You decide where to paste it.
 
 ## Updating
 
-Right-click the cloud > **Restart / update**.
+Right-click the cloud > **Restart / update**. If there's a newer version, it downloads it, installs it quietly and starts again, in about a minute. No blue box, nothing to click.
 
-- Installed with the exe: it opens the download page. Run the newest installer; your notes stay.
-- Installed with the command line: it downloads the newest version and restarts. Your notes stay as they are, and the previous version is kept as `parking_lot.py.bak`. Or run the install line again.
+Downloading the installer again from this page and running it works too. Either way **your notes, settings and files stay**: they live in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, which installing never touches. No setup again.
 
 ## Uninstall
 
-Installed with the exe: Settings > Apps > Installed apps > **Park That Thought** > Uninstall. Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data` until you delete that folder.
+Windows Settings > Apps > Installed apps > **Park That Thought** > Uninstall.
 
-Installed with the command line:
-
-1. Right-click the cloud > **Quit**.
-2. Press `Win+R`, type `shell:startup`, press Enter, and delete **Park That Thought**. Do the same with `shell:programs`, and delete the desktop icon.
-3. Press `Win+R`, type `%LOCALAPPDATA%\ParkThatThought`, press Enter. Your notes are in `parking_lot_data`; copy that folder somewhere if you want to keep them. Then delete the `ParkThatThought` folder.
-
-Only want it to stop starting with Windows? Do step 2 for `shell:startup` only.
+Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, in case you come back. To remove them too, press `Win+R`, type `%LOCALAPPDATA%\ParkThatThought`, press Enter, and delete that folder (copy `parking_lot_data` somewhere first if you want to keep it).
 
 ## Questions
 
@@ -186,15 +174,11 @@ Only want it to stop starting with Windows? Do step 2 for `shell:startup` only.
 
 **Mac or Linux?** Not supported yet. The core runs from source there, but screen-share hiding, focus handling and the quiet rules for check-ins are Windows only.
 
-**Nothing appears after installing.** Look in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data\error.log`. To see errors live, run this in Command Prompt:
+**Nothing appears after installing.** Open Park That Thought from the Start menu. If still nothing, look in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data\error.log` and [open an issue](https://github.com/gmiqbal/ParkThatThought/issues) with what it says.
 
-```
-"%LOCALAPPDATA%\ParkThatThought\venv\Scripts\python.exe" "%LOCALAPPDATA%\ParkThatThought\parking_lot.py"
-```
+**My antivirus flagged it.** Some antivirus apps guess about new, unsigned programs. It's a false alarm; you can check the code yourself. Please [open an issue](https://github.com/gmiqbal/ParkThatThought/issues) with the antivirus name so I can report it to them.
 
 **A hotkey doesn't work.** Another app may use it. Right-click the cloud > Settings > Controls, and pick another.
-
-**Emoji look black and white.** Update the library: `"%LOCALAPPDATA%\ParkThatThought\venv\Scripts\python.exe" -m pip install -U PySide6`.
 
 **Why the name?** "Park that thought" means "hold that thought, we'll come back to it". That's the whole app.
 
