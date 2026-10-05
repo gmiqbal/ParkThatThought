@@ -2,11 +2,15 @@
 
 **A tiny floating cloud for Windows that catches stray thoughts while you work, so you can stay focused.**
 
+[Thought catcher](#park-a-thought-in-two-seconds) + [Drop shelf](#a-drop-shelf-for-files-snips-and-links) + [Meeting bar](#your-calendar-floating-on-the-taskbar) + [Focus timer](#focus-rounds) + [Check-ins](#check-ins) + [Water and eye breaks](#water-and-eye-breaks) + [Reminders](#reminders) + [Focus sounds](#background-noise-and-music) + [AI pattern insights](#copy-your-patterns-for-ai)
+
 You're in the middle of something and a thought pops up: "look this up", "reply to Sam", "did I pay that bill?". Instead of switching apps (and losing 20 minutes), you park it in two seconds and keep going. At your next break, every thought gets one of three exits: done, later, or let go.
 
 **Capture now, decide at the break.**
 
 <img src="docs/list.png" width="848" alt="The list in dark and light mode, with a focus round running">
+
+**Contents:** [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source)
 
 ## Who it's for
 
@@ -47,7 +51,19 @@ Tag it if you like: **urgent**, **distraction** (from outside), **itch** (feels 
 
 ### The list
 
-Click the cloud, press `Ctrl+Alt+L`, or scribble left and right over it. Each thought gets **Done**, **Later** or **Let go**, and `Ctrl+Z` undoes anything. Drag a file, image or link onto the cloud to park it, and drag it back out later. Nothing is ever hard deleted.
+Click the cloud, press `Ctrl+Alt+L`, or scribble left and right over it. Each thought gets **Done**, **Later** or **Let go**, and `Ctrl+Z` undoes anything. Nothing is ever hard deleted.
+
+### A drop shelf for files, snips and links
+
+Drag a file, a screenshot, a link or some text onto the cloud. A dashed ring shows it's ready, and it lands in your list as a note. Took a screenshot with `Win+Shift+S`? Press `Ctrl+V` in the quick note box and it's parked. Drop more files onto a note to keep them together.
+
+<img src="docs/drop-cloud.png" width="150" alt="A file dragged onto the cloud, with the dashed drop ring">
+
+Files are copied in, so they stay even if the original moves or gets deleted (folders are linked, not copied). When you need one, it's right there: hover it and click its copy button, then paste it into WhatsApp, Slack or an email. Or drag it straight out into a chat, an email or a folder. Double-click opens it, right-click shows it in its folder.
+
+Need the note itself in a message? Hover it and click the copy icon at the start of its buttons, or select it and press `Ctrl+C`. **Copy all** at the bottom copies the whole list.
+
+<img src="docs/drop-shelf.png" width="480" alt="Notes holding a boarding pass, a snip and a lease file, with the copy buttons showing">
 
 ### Your calendar, floating on the taskbar
 
@@ -121,7 +137,9 @@ System, Light or Dark theme (System follows Windows). Pick the cloud's color, sh
 | See your list | Click the cloud, `Ctrl+Alt+L`, or scribble left and right over the cloud. |
 | Deal with a thought | **Done**, **Later** or **Let go**. Undo with `Ctrl+Z`. |
 | Start a focus round | **Focus** in the list. |
-| Park a file, image or link | Drag it onto the cloud. |
+| Park a file, image or link | Drag it onto the cloud, or `Ctrl+V` a screenshot in the quick note. |
+| Use a parked file | Drag it out of the note, or hover it and click copy. |
+| Copy a note into a message | Hover it and click the copy icon, or select it and press `Ctrl+C`. |
 | Get help | **?** in the list: how it works and a 1 minute tour. |
 | Settings, timer, nap, quit | Right-click the cloud. |
 
