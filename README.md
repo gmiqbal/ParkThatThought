@@ -2,6 +2,8 @@
 
 **A tiny floating cloud for Windows that catches stray thoughts while you work, so you can stay focused.**
 
+Free and open source. [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/gmiqbal)
+
 [Thought catcher](#park-a-thought-in-two-seconds) + [Drop shelf](#a-drop-shelf-for-files-snips-and-links) + [Meeting bar](#your-calendar-floating-on-the-taskbar) + [Focus timer](#focus-rounds) + [Check-ins](#check-ins) + [Water and eye breaks](#water-and-eye-breaks) + [Reminders](#reminders) + [Focus sounds](#background-noise-and-music) + [AI pattern insights](#copy-your-patterns-for-ai)
 
 You're in the middle of something and a thought pops up: "look this up", "reply to Sam", "did I pay that bill?". Instead of switching apps (and losing 20 minutes), you park it in two seconds and keep going. At your next break, every thought gets one of three exits: done, later, or let go.
@@ -14,7 +16,7 @@ You're in the middle of something and a thought pops up: "look this up", "reply 
 
 <img src="docs/list.png" width="848" alt="The list in dark and light mode, with a focus round running">
 
-**Contents:** [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source)
+**Contents:** [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source) · [Support](#support)
 
 ## Who it's for
 
@@ -29,7 +31,7 @@ It is not a full task manager. There's no account, no cloud sync and no phone ap
 Open **Command Prompt** or **PowerShell** (press Start, type `cmd`, press Enter), paste this line and press Enter:
 
 ```
-powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | Out-String | iex"
 ```
 
 That's it. A cloud appears on the right edge of your screen.
@@ -173,7 +175,7 @@ Only want it to stop starting with Windows? Do step 2 for `shell:startup` only.
 
 ## Questions
 
-**Is it free?** Yes. MIT license.
+**Is it free?** Yes. MIT license. If it helps you, you can [buy me a coffee](https://buymeacoffee.com/gmiqbal).
 
 **Mac or Linux?** Not supported yet. The core runs from source there, but screen-share hiding, focus handling and the quiet rules for check-ins are Windows only.
 
@@ -203,6 +205,14 @@ python parking_lot.py
 In a git checkout, **Restart / update** only restarts. Use `git pull` to update. Notes are saved in `parking_lot_data/` next to the script.
 
 The whole app is one file, `parking_lot.py`, with two libraries: PySide6 (Qt) and pynput (global hotkeys and mouse gestures).
+
+## Support
+
+I build Park That Thought in my spare time and keep it free. If it saves you some focus:
+
+- [Buy me a coffee](https://buymeacoffee.com/gmiqbal).
+- Star the repo so more people find it.
+- [Report a bug or ask for a feature](https://github.com/gmiqbal/ParkThatThought/issues).
 
 ## License
 

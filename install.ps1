@@ -1,5 +1,5 @@
 # Park That Thought installer for Windows. No admin needed.
-# Run:  powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | iex"
+# Run:  powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | Out-String | iex"
 # Running it again updates the app. Your notes (parking_lot_data) are never touched.
 & {
     $ProgressPreference = "SilentlyContinue"

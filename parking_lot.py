@@ -84,7 +84,7 @@ APP_VERSION = "1.1"
 APP_AUTHOR = "G M Iqbal Mahmud"
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
-COFFEE_URL = ""        # fill in to turn on About > Buy me a coffee
+COFFEE_URL = "https://buymeacoffee.com/gmiqbal"   # About > Buy me a coffee
 RESCUE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkingLotRescue"
 RESCUE_FILE = RESCUE_DIR / "tasks.rescue.json"
 BACKUP_KEEP_DAYS = 14
@@ -9947,6 +9947,7 @@ class Panel(RoundedWindow):
         box.setStyleSheet(STYLE + f"QMessageBox {{ background: {C['bg']}; }}")
         box.setTextFormat(Qt.RichText)
         box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>Made by {APP_AUTHOR}.<br><br>"
+                    f"Free and open source. If it helps you, a coffee helps me keep building it.<br><br>"
                     f"{link(GITHUB_URL, 'GitHub')}<br>{link(COFFEE_URL, 'Buy me a coffee')}<br><br>"
                     f"<span style='color:{C['dim']}'>Thoughts stay local. Calendar and phone alerts are optional. No tracking.</span>")
         box.setTextInteractionFlags(Qt.TextBrowserInteraction)
@@ -14805,10 +14806,11 @@ class SettingsWindow(QWidget):
         area, v = self._page(APP_NAME, APP_TAGLINE)
         gl = self._group(v)
         self._row(gl, f"Version {APP_VERSION}", f"Made by {APP_AUTHOR}.")
-        for label, url in (("GitHub", GITHUB_URL), ("Buy me a coffee", COFFEE_URL)):
+        for label, desc, url in (("GitHub", "Source code, updates and bug reports.", GITHUB_URL),
+                                ("Buy me a coffee", "PTT is free. A coffee helps me keep building it.", COFFEE_URL)):
             b = self._button("Open" if url else "Coming soon", lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
             b.setEnabled(bool(url))
-            self._row(gl, label, "", b)
+            self._row(gl, label, desc, b)
         self._row(gl, "Updates", "Gets the newest version from GitHub, then restarts. Your notes stay.",
                   self._button("Restart / update", ctx.restart))
         v.addStretch(1)
