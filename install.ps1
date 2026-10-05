@@ -64,7 +64,8 @@
     }
 
     $shell = New-Object -ComObject WScript.Shell
-    foreach ($folder in [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup")) {
+    # the desktop icon also brings the cloud back if it ever goes missing
+    foreach ($folder in [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("Desktop")) {
         $lnk = $shell.CreateShortcut((Join-Path $folder "Park That Thought.lnk"))
         $lnk.TargetPath = $vpyw
         $lnk.Arguments = "`"$script`""
@@ -78,4 +79,5 @@
     Write-Host ""
     Write-Host "Done. Look for the cloud on the right edge of your screen." -ForegroundColor Green
     Write-Host "Ctrl+Alt+P parks a thought, Ctrl+Alt+L opens the list. It also starts with Windows."
+    Write-Host "Cloud gone? Double-click Park That Thought on your desktop to bring it back."
 }

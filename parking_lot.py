@@ -453,6 +453,15 @@ def presence_decision(fg_class, fg_rect, fg_monitor_rect, same_monitor, is_ours,
     return "hide" if ((covers and not standard_maximized) or exclusive_fullscreen) else "show"
 
 
+def bubble_home(bubble):
+    """Puts the circle back on the main screen if its middle is off every screen. True if it moved."""
+    if QGuiApplication.mouseButtons() or QGuiApplication.screenAt(bubble.geometry().center()) is not None:
+        return False  # on a screen, or being dragged
+    a = QGuiApplication.primaryScreen().availableGeometry()
+    bubble.move(a.right() - bubble.width() - 4, a.center().y())
+    return True
+
+
 class PresenceGuard(QObject):
     """Keeps the circle on screen through Show Desktop (Win+D / touchpad swipe), and tucks it away while a
     full-screen app (movie, game, presentation) is in front on the same monitor. Windows only; polls 2x/s."""
@@ -465,6 +474,7 @@ class PresenceGuard(QObject):
         self.hidden_for_fs = False
         self.calendar_bar = None
         self.visibility_changed = lambda: None
+        self.rescue = lambda: None        # brings the circle back if it ended up off every screen
         self.ok = False
         if not IS_WIN:
             return
@@ -535,6 +545,22 @@ class PresenceGuard(QObject):
             exclusive_fullscreen = self._quns_d3d_fullscreen()
             decision = presence_decision(buf.value, fg_rect, mon_rect, fg_mon == my_mon, ours,
                                          exclusive_fullscreen and fg_mon == my_mon, ordinary_maximized)
+            # the circle first, so a problem with the meeting bar can never keep it hidden
+            if decision == "hide" and self.enabled_fs:
+                if not self.hidden_for_fs:
+                    self.hidden_for_fs = True
+                    self.bubble.hide()
+                    self.visibility_changed()
+            else:
+                if self.hidden_for_fs:
+                    self.hidden_for_fs = False
+                    self.bubble.show()
+                    self.visibility_changed()
+                self.rescue()
+                if decision == "raise" or not u.IsWindowVisible(me) or u.IsIconic(me):
+                    u.ShowWindow(me, 4)  # SW_SHOWNOACTIVATE
+                    u.SetWindowPos(me, wt.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
+                    # HWND_TOPMOST, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             if self.calendar_bar is not None:
                 bar = self.calendar_bar
                 bar.sync_taskbar_position()
@@ -553,20 +579,8 @@ class PresenceGuard(QObject):
                         u.SetWindowPos(bh, wt.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
                         if dock_refresh:
                             bar._last_dock_raise = time.monotonic()
-            if decision == "hide" and self.enabled_fs:
-                if not self.hidden_for_fs:
-                    self.hidden_for_fs = True
-                    self.bubble.hide()
-                    self.visibility_changed()
-                return
-            if self.hidden_for_fs:
-                self.hidden_for_fs = False
-                self.bubble.show()
-                self.visibility_changed()
-            if decision == "raise" or not u.IsWindowVisible(me) or u.IsIconic(me):
-                u.ShowWindow(me, 4)  # SW_SHOWNOACTIVATE
-                u.SetWindowPos(me, wt.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
-                # HWND_TOPMOST, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            if self.qt.interval() != 500:
+                self.qt.setInterval(500)  # a one-off failure no longer slows the guard for good
         except Exception as e:
             log_error(f"presence check failed: {e}")
             self.qt.setInterval(5000)  # back off instead of spamming the log
@@ -3282,7 +3296,7 @@ class SpeechBubble(QWidget):
     def say(self, circle_rect, text, buttons=(), timeout_ms=7000, emoji=None, anim="bounce",
             minute_input=None):
         """buttons: [(label, response_key)]; clicking closes the bubble and emits closed(response_key).
-        emoji: an optional animated face beside the text. minute_input: (response prefix, maximum minutes)."""
+        emoji: an optional animated face beside the text. minute_input: (response prefix, maximum minutes[, button])."""
         self.timer.stop()
         self.face.set(emoji, anim)
         self._minute_prefix = minute_input[0] if minute_input else None
@@ -3290,6 +3304,7 @@ class SpeechBubble(QWidget):
         if minute_input:
             self.minute_validator.setTop(minute_input[1])
             self.minute_edit.setAccessibleName(f"Custom {minute_input[0]} minutes")
+            self.minute_start.setText(minute_input[2] if len(minute_input) > 2 else "Start")
         self.minute_row.setVisible(bool(minute_input))
         for b in self._btns:
             b.setParent(None)
@@ -4042,14 +4057,35 @@ class NudgeManager(QObject):
                                                                  ("Skip", "worked_0")]
         self._say_followup("Nice. Roughly how long were you actually working? I'll log that as focus.",
                            chips, "__worked__", emoji="\u23F1\uFE0F", timeout_ms=45000,
-                           minute_input=("worked", max(1, most)))
+                           minute_input=("worked", max(1, most), "Log"))
 
-    def log_forgotten_focus(self, minutes):
-        """'I was working, forgot the timer': the screen time before the check-in goes in as a focus session."""
+    def ask_forgot(self):
+        """Forgot to start the timer (the list's clock button, or the circle's menu): how long, then what for."""
+        self._say_followup("Forgot the timer? Roughly how long were you working?",
+                           [(f"{m} min", f"forgot_{m}") for m in (10, 20, 30)] + [("Cancel", "forgot_cancel")],
+                           "__forgot__", emoji="\u23F1\uFE0F", timeout_ms=30000,
+                           minute_input=("forgot", 600, "Log"))
+
+    def log_forgotten_focus(self, minutes, on=""):
+        """Forgot the timer: the last `minutes` go in as a focus session, with what it was for if given.
+        Returns the tidied tag."""
         end = datetime.now()
-        FocusTimer._write({"kind": "focus", "start": (end - timedelta(minutes=minutes)).isoformat(timespec="seconds"),
-                           "end": end.isoformat(timespec="seconds"), "planned_min": minutes,
-                           "focused_min": float(minutes), "completed": True, "note": "logged after the fact"})
+        row = {"kind": "focus", "start": (end - timedelta(minutes=minutes)).isoformat(timespec="seconds"),
+               "end": end.isoformat(timespec="seconds"), "planned_min": minutes,
+               "focused_min": float(minutes), "completed": True, "note": "logged after the fact"}
+        on = " ".join(str(on or "").split())[:80]
+        if on:
+            row["on"] = on
+            recent = [t for t in self._st("recent_tags", []) if t.lower() != on.lower()]
+            self.store.settings["recent_tags"] = [on] + recent[:4]
+            self.store.save()
+        FocusTimer._write(row)
+        return on
+
+    def _log_forgot(self, minutes, on):
+        on = self.log_forgotten_focus(minutes, on)
+        line = f"Logged {minutes} min of focus" + (f" for {short_text(on, 30)}." if on else ".")
+        QTimer.singleShot(0, lambda: self._say_followup(line, [], None, timeout_ms=3500))
 
     def _say_followup(self, text, buttons, tag, emoji="\U0001F44D", timeout_ms=20000, minute_input=None):
         self._asked = tag
@@ -4133,15 +4169,16 @@ class NudgeManager(QObject):
                 picks.append(t)
         return picks[:4]
 
-    def ask_tag(self, kind=None, lead=""):
-        """Ask what the running round is for. Answering is optional; it times out quietly."""
+    def ask_tag(self, kind=None, lead="", answer="__tag__", q=None):
+        """Ask what the running round (or a forgotten one: answer="__forgot_tag__") is for. Answering is optional;
+        it times out quietly."""
         kind = kind or self.timer.kind
         self._tag_picks = self.tag_choices(kind)
-        q = "Break for?" if kind == "break" else "What's this round for?"
+        q = q or ("Break for?" if kind == "break" else "What's this round for?")
         self._say_followup((lead + " " if lead else "") + q,
                            [(short_text(t, 22), f"tag_{i}") for i, t in enumerate(self._tag_picks)]
                            + [("Other...", "tag_other"), ("Skip", "tag_skip")],
-                           "__tag__", emoji="☕" if kind == "break" else "\U0001F3AF", timeout_ms=20000)
+                           answer, emoji="☕" if kind == "break" else "\U0001F3AF", timeout_ms=20000)
 
     def ask_tag_text(self):
         kind = self.timer.kind
@@ -4177,6 +4214,25 @@ class NudgeManager(QObject):
                 picks = getattr(self, "_tag_picks", [])
                 if int(key[4:]) < len(picks):
                     self.timer.set_on(picks[int(key[4:])])
+            return
+        if msg == "__forgot__":
+            mins = int(key[len("forgot_"):]) if key.startswith("forgot_") and key[len("forgot_"):].isdigit() else 0
+            if mins:
+                self._forgot_min = mins
+                QTimer.singleShot(0, lambda: self.ask_tag("focus", f"{mins} min.", "__forgot_tag__",
+                                                          "What was it for?"))
+            return
+        if msg == "__forgot_tag__":
+            mins, self._forgot_min = getattr(self, "_forgot_min", 0), 0
+            if not mins:
+                return
+            if key == "tag_other":
+                QTimer.singleShot(0, lambda: self._log_forgot(mins, ask(None, "What was it for?", "",
+                                                                        chips=self.tag_choices("focus"))))
+                return
+            picks = getattr(self, "_tag_picks", [])
+            i = int(key[4:]) if key.startswith("tag_") and key[4:].isdigit() else -1
+            self._log_forgot(mins, picks[i] if 0 <= i < len(picks) else "")   # Skip, Esc or no answer: untagged
             return
         if msg == "__away__":
             if key == "trim" and getattr(self, "_away", None):
@@ -7759,6 +7815,22 @@ def play_icon(color):
     return QIcon(pm)
 
 
+def rewind_icon(color):
+    """A clock with a turn-back arrow: log a focus round you forgot to time."""
+    from PySide6.QtGui import QIcon
+    pm = QPixmap(32, 32)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor(color), 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.drawArc(QRectF(6, 6, 20, 20), 180 * 16, -300 * 16)      # open at the lower left, like a clock wound back
+    p.drawPolyline([QPointF(16, 11), QPointF(16, 16), QPointF(19.5, 18.5)])
+    p.setBrush(QColor(color))
+    p.drawPolygon([QPointF(2.5, 14), QPointF(9.5, 14), QPointF(6, 19)])
+    p.end()
+    return QIcon(pm)
+
+
 def funnel_icon(color):
     """A small painted funnel (the filter button inside the search box)."""
     from PySide6.QtGui import QIcon
@@ -8831,6 +8903,16 @@ class Panel(RoundedWindow):
         ib.addWidget(self.break_spin)
         ib.addWidget(unit(self.break_spin))
         ib.addWidget(go_b)
+        self.log_forgot = None               # set by main(): asks how long and what for, then logs it as focus
+        self.forgot_btn = QToolButton(self.idle_box)
+        self.forgot_btn.setObjectName("timerBtn")
+        self.forgot_btn.setIconSize(QSize(16, 16))
+        self.forgot_btn.setStyleSheet("padding: 3px 3px;")    # icon only: keeps the strip inside the narrowest list
+        self.forgot_btn.setCursor(Qt.PointingHandCursor)
+        self.forgot_btn.setToolTip("Forgot the timer? Log a focus round you already did")
+        self.forgot_btn.setAccessibleName("Forgot the timer")
+        self.forgot_btn.clicked.connect(lambda: self.log_forgot and self.log_forgot())
+        ib.addWidget(self.forgot_btn)
         ib.addStretch(1)
         tr.addWidget(self.idle_box, 1)
         # running / overrun: label + up to 3 buttons
@@ -10015,6 +10097,9 @@ class Panel(RoundedWindow):
                 self.link.setChecked(want)
                 self.link._sync_tip(want)
                 self.link.blockSignals(False)
+            if self.forgot_btn.property("tint") != C["dim"]:      # a painted icon: repaint after a theme change
+                self.forgot_btn.setProperty("tint", C["dim"])
+                self.forgot_btn.setIcon(rewind_icon(C["dim"]))
             self.idle_box.show()
             self.timer_label.hide()
             for b in self.timer_btns:
@@ -15088,6 +15173,9 @@ def main():
                 dr.setToolTip(DRIFT_TIP)
                 m.setToolTipsVisible(True)
         if not timer.running:
+            nd = holder.get("nudges")
+            if nd:
+                m.addAction("Forgot the timer? Log a round...", nd.ask_forgot)
             nap_menu = m.addMenu("Nap timer")
             for minutes in nap_presets(store.settings):
                 nap_menu.addAction(f"{minutes} min", lambda n=minutes: start_nap(n))
@@ -15450,11 +15538,9 @@ def main():
     bubble.moved.connect(remember_bubble)
 
     def rescue_bubble(*_):
-        """A monitor or TV was unplugged or changed: bring the circle back if it's now off every screen."""
-        c = bubble.geometry().center()
-        if QGuiApplication.screenAt(c) is None:
-            a = QGuiApplication.primaryScreen().availableGeometry()
-            bubble.move(a.right() - bubble.width() - 4, a.center().y())
+        """A monitor was unplugged, the resolution or scale changed, or the PC woke from sleep:
+        bring the circle back if it's now off every screen. Also runs on every guard tick."""
+        if bubble_home(bubble):
             remember_bubble(bubble.pos())
     QGuiApplication.instance().screenRemoved.connect(lambda *_: QTimer.singleShot(500, rescue_bubble))
     QGuiApplication.instance().primaryScreenChanged.connect(lambda *_: QTimer.singleShot(500, rescue_bubble))
@@ -15480,6 +15566,7 @@ def main():
                           ([holder["speech"]] if holder.get("speech") else []) +
                           [meeting_badge, meeting_badge.agenda, meeting_badge.notice])
     guard.visibility_changed = meeting_badge.update_meeting
+    guard.rescue = rescue_bubble
     guard.calendar_bar = meeting_badge
     guard.enabled_fs = setting("hide_fullscreen", True)
     holder["guard"] = guard
@@ -15519,6 +15606,7 @@ def main():
         else:
             QTimer.singleShot(400, nudges.boost)
     panel.ask_tag = lambda: nudges.ask_tag_text()
+    panel.log_forgot = lambda: (panel.hide(), nudges.ask_forgot())    # like Focus: the list tucks away, the circle asks
     timer.started.connect(on_focus_started)
     timer.away_back.connect(nudges.away_back)
     timer.overrun_return.connect(nudges.back_from_break)
@@ -15714,7 +15802,8 @@ def main():
         if "quit" in msg:                         # a newer copy (Restart) is taking over
             hard_quit()
             return
-        if "show" in msg:
+        if "show" in msg:                         # started again, e.g. from the desktop icon
+            rescue_bubble()
             bubble.show()
             bubble.raise_()
             panel.show_near_bubble()

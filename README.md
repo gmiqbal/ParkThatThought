@@ -40,7 +40,7 @@ What the installer does (you can [read it here](install.ps1), it's short):
 
 1. Finds Python 3.9 or newer. If you don't have it, installs Python 3.12 with winget (Windows' own app installer).
 2. Puts the app in `%LOCALAPPDATA%\ParkThatThought` with its own private Python environment, and installs its two libraries, PySide6 and pynput (about 200 MB the first time).
-3. Adds **Park That Thought** to the Start menu and to startup, so it's there every time you log in.
+3. Adds **Park That Thought** to the Start menu, startup and your desktop, so it's there every time you log in. If the cloud ever goes missing, double-click the desktop icon to bring it back.
 4. Starts the app.
 
 No admin rights needed. Running the same line again updates the app and never touches your notes.
@@ -168,7 +168,7 @@ Or run the install line again.
 ## Uninstall
 
 1. Right-click the cloud > **Quit**.
-2. Press `Win+R`, type `shell:startup`, press Enter, and delete **Park That Thought**. Do the same with `shell:programs`.
+2. Press `Win+R`, type `shell:startup`, press Enter, and delete **Park That Thought**. Do the same with `shell:programs`, and delete the desktop icon.
 3. Press `Win+R`, type `%LOCALAPPDATA%\ParkThatThought`, press Enter. Your notes are in `parking_lot_data`; copy that folder somewhere if you want to keep them. Then delete the `ParkThatThought` folder.
 
 Only want it to stop starting with Windows? Do step 2 for `shell:startup` only.
