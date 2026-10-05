@@ -8,6 +8,10 @@ You're in the middle of something and a thought pops up: "look this up", "reply 
 
 **Capture now, decide at the break.**
 
+**Watch the 2 minute intro:**
+
+[<img src="docs/intro.png" width="848" alt="Watch the 2 minute intro video">](docs/intro.mp4)
+
 <img src="docs/list.png" width="848" alt="The list in dark and light mode, with a focus round running">
 
 **Contents:** [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source)
