@@ -1760,30 +1760,43 @@ AI_PROMPT = """# Park That Thought export: my parked thoughts
 I use Park That Thought, a capture-now, decide-later tool. When a thought pulls at me (often during a
 focus session), I park it in a couple of seconds and go back to work. Each row below is one parked thought.
 
-Please help me understand my patterns. Be concrete and kind, and base everything on the data:
-1. Recurring themes, people, projects or worries. Group similar thoughts.
-2. When I get pulled away most: time of day, weekday, and how many minutes into a focus session.
-   Also how often I ask for more break time, how much I request, how late I return from breaks,
-   whether that changes by time of day, and how I answer check-ins (ignoring or snoozing a lot
-   can itself be a signal).
-3. "urge" (shown to me as "itch") means it felt urgent but could wait (a pull from inside); "urgent" means
-   it really needed doing soon. Some itches have optional acted-on counts and minutes. Describe those
-   without judging them or treating them as a failure. Done is a separate note state.
-4. "distraction" means something from outside broke my focus (a person, a ping, noise). What kinds, when,
-   and how far into sessions? Which could I prevent (phone away, door closed, notifications off)?
-5. What I keep parking but never act on, clear without doing, or let go. Recurring let-go thoughts (the same
-   fear or worry coming back) are worth naming gently.
-6. Lifts (small moments of joy, calm or connection) and drains (small moments that put me on edge or wore me
-   down): when and around what they show up, and whether drains cluster before distractions or itches.
-   Suggest ways to get more of the lifts.
-7. Anything that hints at a trigger (fatigue, avoidance of hard work, social worry, tools, curiosity).
-8. Suggest 1 or 2 small, specific experiments for my next week.
-9. If Important work is present, use my chosen work and its deadlines to suggest a realistic next
-   step for today. The list is a current snapshot, not a record of what I worked on; a nearer
-   deadline does not necessarily mean the work matters more to me.
-10. Where my focus time goes: minutes by what each round was for, which apps and windows pulled me away
-   (the ones I marked distracting, and unmarked ones that look like it), and how my calendar shapes my day
-   (focus before or after meetings, days too packed to focus).
+Help me know myself. Show me patterns I probably haven't noticed. Don't recite what I recorded: read between
+the rows. Look at how things connect (drains before distractions, late nights after light days, music and how
+often thoughts surface, which notes I keep putting off) and what that says about me.
+
+How to write it:
+- Open with "Three things you might not have noticed": one line each, each with its number.
+- Then these short sections. Lead each with a small table (3 to 7 rows), then at most two sentences:
+  1. When you focus: time of day, weekday, your best and worst windows.
+  2. How steady you are: active days, streaks, start time, late nights.
+  3. Stamina: session lengths that work for you, rounds in a row, when thoughts start pulling.
+  4. What pulls you away: the minute it happens, itches vs distractions, apps I marked (and unmarked ones that
+     look like it), people.
+  5. What's on your mind: themes, recurring let-go worries, things parked but never done (quote short titles).
+  6. Stress and lifts: when drains and lifts show up and around what; how to get more lifts.
+  7. Putting things off: snoozed reminders and check-ins, the later pile, late returns from breaks.
+  8. Time and calendar: what each round was for, and how meetings shape focus (only if there is data).
+- Use up to three small text bar charts (with the block character) where a picture says it faster.
+- End with "What to try": a table of 3 to 5 rows with columns what I noticed | evidence (a number) |
+  one small change for next week | how I'll know it worked. If Important work is present, add a row with a
+  realistic next step for today.
+- Skip a section in one line when the data is thin. With fewer than 5 sessions or about a week of data, call
+  findings early hints, not patterns.
+- If earlier analyses are included, say what changed since then.
+
+Rules:
+- Every claim rests on a number from the data. "Your rhythm" holds numbers the app already counted; use them
+  instead of recounting the CSV.
+- Warm, direct coach. No diagnosing, no shaming, no generic tips (no "try the Pomodoro technique" unless the
+  data points to it). About two screens long.
+- "urge" (shown to me as "itch") is a pull from inside that could wait. It is not a failure. "urgent" means it
+  really needed doing soon. Itch acted counts and minutes are observations, not scores.
+- "distraction" is something from outside (a person, a ping, noise). Suggest ways to prevent the common ones.
+- Lifts are small moments of joy, calm or connection; drains are small moments that put me on edge or wore me
+  down.
+- Important work is a current snapshot, not a record of what I worked on. A nearer deadline doesn't mean the
+  work matters more to me.
+- Apps marked distracting are marked per round: the same app can help in another round.
 
 Column guide: captured_at (local time), timer_state (what the timer was doing when I parked it:
 focus = in a focus session, paused = focus session on pause, break = on a break, break_over = the break
@@ -1792,23 +1805,18 @@ session when the thought came), focus_planned_min, source (how it was captured: 
 quick private box, list = typed in the full list, *_paste / *_drop = pasted or dropped), outcome
 (open, done, cleared = done then removed, later = kept for someday, let go = released without action,
 usually a fear, a worry, a distraction or an itch that passed; abandoned = removed without doing; notes I deleted
-as mistakes or tests are already left out), hours_to_resolve
-(capture to done). itch_acted_count and itch_acted_minutes are optional records of acting on that
-parked itch, entered at the start/end or afterward. They are observations, not scores. In the sessions table, kind is focus, break, break_extension (each time I chose
-"A few more min"), or break_return (when I came back). A break_extension row records the requested
-minutes in planned_min and minutes past the previous break in extension_after_overrun_min; the
-following break row records the actual timer. late_back_min applies only to break_return rows.
-Thoughts parked in break_over time can hint at what kept
-me from coming back; thoughts with timer_state none show what my mind does outside sessions.
-kind = checkin rows are friendly check-ins while I wasn't focusing; the note says what was asked and how I
-answered (focus = started a session, working = I was working but forgot the timer, so that time was logged
-as focus, break, fine, snooze = not now, timeout = ignored). focus_adjust rows take time I was away out of a
-session (away_min). my_flags lists any flags I made myself (their names say what they mean). The music column (only when I turned music logging on) says whether media was playing
-when I parked the thought, and from which app: does music change how often thoughts surface, or which kind?
-In the sessions table, "for" is what I said a focus round or break was for (a project, Meal, Call, Rest, Walk),
-and "apps" (only when I turned app tracking on) lists the apps and window titles I was in during a focus round
-with minutes, marked distracting when I said so for that round (the same app can help in another round). Calendar events, when present, are my own
-calendar for the export period plus the next two weeks (when = past, now or upcoming).
+as mistakes or tests are already left out), hours_to_resolve (capture to done), reminder_snoozes (how many
+times I snoozed that note's reminder). my_flags lists flags I made myself (their names say what they mean).
+The music column (only when I turned music logging on) says whether media was playing when I parked it.
+In the sessions table, kind is focus, break, break_extension (each time I chose "A few more min"), or
+break_return (when I came back). A break_extension row records the requested minutes in planned_min and
+minutes past the previous break in extension_after_overrun_min. late_back_min applies only to break_return rows.
+kind = checkin rows are friendly check-ins while I wasn't focusing (focus = started a session, working = I was
+working but forgot the timer, so that time was logged as focus, break, fine, snooze = not now, timeout =
+ignored). focus_adjust rows take time I was away out of a session (away_min). "for" is what I said a round or
+break was for, and "apps" (only when I turned app tracking on) lists the apps and window titles I was in during
+a focus round with minutes. Calendar events, when present, are my own calendar for the export period plus the
+next two weeks (when = past, now or upcoming).
 """
 
 
@@ -1857,6 +1865,149 @@ def timer_state_of(f):
     return "none" if f.get("in_focus") is False else "unknown"
 
 
+DAY_PARTS = (("After midnight (0-5)", 0, 5), ("Early (5-9)", 5, 9), ("Morning (9-12)", 9, 12),
+             ("Afternoon (12-17)", 12, 17), ("Evening (17-21)", 17, 21), ("Night (21-24)", 21, 24))
+
+
+def _bar(v, top, width=12):
+    return "█" * max(1, round(width * v / top)) if v and top else ""
+
+
+def _median(xs):
+    xs = sorted(xs)
+    return (xs[len(xs) // 2] + xs[(len(xs) - 1) // 2]) / 2 if xs else 0
+
+
+def rhythm_section(thoughts, sessions, days=None):
+    """Patterns the app counts itself (time of day, weekday, streaks, stretches, snoozes) as small Markdown
+    tables, so the AI reads them instead of miscounting long CSVs. '' when there's nothing to count."""
+    def when(iso):
+        try:
+            return datetime.fromisoformat(str(iso)).replace(tzinfo=None)
+        except Exception:
+            return None
+    focus = sorted(((when(x.get("start")), x) for x in sessions
+                    if x.get("kind", "focus") == "focus" and when(x.get("start"))), key=lambda p: p[0])
+    if not sessions and not thoughts:
+        return ""
+    pct = (lambda a, b: f"{round(100 * a / b)}%" if b else "n/a")
+    mins = lambda x: x.get("focused_min", 0) or 0
+    out = ["## Your rhythm (counted by the app)\n"]
+    caps = [(when(r["captured_at"]), r) for r in thoughts if when(r["captured_at"])]
+    in_focus = [(c, r) for c, r in caps if timer_state_of(r["focus"]) in ("focus", "paused")]
+
+    if focus:
+        rows = []
+        for name, a, b in DAY_PARTS:
+            part = [x for t, x in focus if a <= t.hour < b]
+            m = sum(mins(x) for x in part)
+            th = sum(1 for c, _r in in_focus if a <= c.hour < b)
+            rows.append((name, len(part), m, pct(sum(1 for x in part if x.get("completed")), len(part)),
+                         f"{th / (m / 60):.1f}" if m >= 30 else ""))
+        top = max(r[2] for r in rows)
+        out.append("### Time of day\n\n| When | Sessions | Focus min | | Finished | Thoughts per focus hour |\n"
+                   "|---|---|---|---|---|---|")
+        out += [f"| {n} | {c} | {round(m)} | {_bar(m, top)} | {f} | {t} |" for n, c, m, f, t in rows if c]
+        rows = []
+        for i, d in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
+            part = [x for t, x in focus if t.weekday() == i]
+            rows.append((d, len(part), sum(mins(x) for x in part),
+                         pct(sum(1 for x in part if x.get("completed")), len(part))))
+        top = max(r[2] for r in rows)
+        out.append("\n### Weekday\n\n| Day | Sessions | Focus min | | Finished |\n|---|---|---|---|---|")
+        out += [f"| {d} | {c} | {round(m)} | {_bar(m, top)} | {f} |" for d, c, m, f in rows]
+
+        # consistency
+        dates = sorted({t.date() for t, _x in focus})
+        first = min((datetime.now() - timedelta(days=days)).date(), dates[0]) if days else dates[0]
+        span = (datetime.now().date() - first).days + 1
+        best = run = 1
+        for a, b in zip(dates, dates[1:]):
+            run = run + 1 if (b - a).days == 1 else 1
+            best = max(best, run)
+        cur, d = 0, datetime.now().date()
+        if d not in dates:
+            d -= timedelta(days=1)                # today isn't over yet
+        while d in dates:
+            cur, d = cur + 1, d - timedelta(days=1)
+        per_day, first_start = {}, {}
+        for t, x in focus:
+            per_day[t.date()] = per_day.get(t.date(), 0) + mins(x)
+            first_start.setdefault(t.date(), t.hour * 60 + t.minute)    # focus is sorted, so the first wins
+        starts = sorted(first_start.values())
+        hm = lambda m: f"{int(m) // 60:02d}:{int(m) % 60:02d}"
+        q1, q3 = starts[len(starts) // 4], starts[(3 * len(starts)) // 4]
+        late = sum(1 for t, _x in focus if t.hour >= 22 or t.hour < 5)
+        out.append("\n### Consistency\n\n| Measure | Value |\n|---|---|")
+        out += [f"| Days with focus | {len(dates)} of {span} ({pct(len(dates), span)}) |",
+                f"| Longest streak / current streak | {best} / {cur} days |",
+                f"| Median focus on a focus day | {round(_median(list(per_day.values())))} min |",
+                f"| Usual first start (middle half) | {hm(_median(starts))} ({hm(q1)} to {hm(q3)}) |",
+                f"| Sessions started after 22:00 or before 05:00 | {late} ({pct(late, len(focus))}) |"]
+
+        # stretches: rounds with 20 min or less between them
+        chains, prev_end = [], None
+        for t, x in focus:
+            if prev_end and 0 <= (t - prev_end).total_seconds() <= 20 * 60:
+                chains[-1].append((t, x))
+            else:
+                chains.append([(t, x)])
+            prev_end = when(x.get("end")) or t
+        longest = max(chains, key=lambda c: (len(c), sum(mins(x) for _t, x in c)))
+        out.append("\n### Stretches (rounds 20 min or less apart)\n\n| Measure | Value |\n|---|---|")
+        out += [f"| Stretches | {len(chains)}, average {len(focus) / len(chains):.1f} rounds each |",
+                f"| Longest | {len(longest)} rounds, {round(sum(mins(x) for _t, x in longest))} min "
+                f"on {longest[0][0]:%a %d %b} |",
+                f"| Stood alone (one round, then stopped) | {pct(sum(1 for c in chains if len(c) == 1), len(chains))} |"]
+
+        out.append("\n### Session length\n\n| Planned | Sessions | Finished | Average focused |\n|---|---|---|---|")
+        for name, a, b in (("15 min or less", 0, 15), ("16-30 min", 15, 30), ("31-50 min", 30, 50),
+                           ("Over 50 min", 50, 10 ** 6)):
+            part = [x for _t, x in focus if a < (x.get("planned_min") or 0) <= b]
+            if part:
+                out.append(f"| {name} | {len(part)} | {pct(sum(1 for x in part if x.get('completed')), len(part))} | "
+                           f"{round(sum(mins(x) for x in part) / len(part))} min |")
+
+    minutes = [r["focus"].get("minute") for _c, r in in_focus if isinstance(r["focus"].get("minute"), (int, float))]
+    if minutes:
+        rows = [(name, sum(1 for m in minutes if a <= m < b)) for name, a, b in
+                (("0-5", 0, 5), ("5-15", 5, 15), ("15-25", 15, 25), ("25-40", 25, 40), ("40+", 40, 10 ** 6))]
+        top = max(c for _n, c in rows)
+        out.append(f"\n### When thoughts surface in focus (median minute {round(_median(minutes))})\n\n"
+                   "| Minutes in | Thoughts | |\n|---|---|---|")
+        out += [f"| {n} | {c} | {_bar(c, top)} |" for n, c in rows]
+
+    # putting things off
+    checkins = [x for x in sessions if x.get("kind") == "checkin"]
+    put_off = [x for x in checkins if x.get("response") in ("snooze", "timeout")]
+    hours = [when(x.get("start") or x.get("end")).hour for x in put_off if when(x.get("start") or x.get("end"))]
+    snoozed = sorted((r for r in thoughts if r.get("reminder_snoozes", 0) >= 2), key=lambda r: -r["reminder_snoozes"])
+    ext = [x for x in sessions if x.get("kind") == "break_extension"]
+    late_back = [x.get("overrun_min", 0) or 0 for x in sessions if x.get("kind") == "break_return"]
+    now = datetime.now()
+    later = [(now - c).days for c, r in caps if r["outcome"] == "later"]
+    stale = sum(1 for c, r in caps if r["outcome"] == "open" and (now - c).days > 7)
+    rows = []
+    if checkins:
+        rows.append(f"| Check-ins snoozed or ignored | {len(put_off)} of {len(checkins)} ({pct(len(put_off), len(checkins))})"
+                    + (f", most at {max(set(hours), key=hours.count):02d}:00" if hours else "") + " |")
+    rows.append(f"| Reminders snoozed | {sum(r.get('reminder_snoozes', 0) for r in thoughts)} |")
+    if snoozed:
+        rows.append("| Snoozed most | " + "; ".join(f"{r['title'][:40]} ({r['reminder_snoozes']}x)"
+                                                  for r in snoozed[:5]).replace("|", "/") + " |")
+    if ext:
+        rows.append(f"| Breaks stretched | {len(ext)}, {round(sum(x.get('requested_min', 0) or 0 for x in ext))} extra min |")
+    if late_back:
+        rows.append(f"| Back from breaks | median {round(_median(late_back), 1)} min late, "
+                    f"{pct(sum(1 for m in late_back if m > 5), len(late_back))} more than 5 min late |")
+    if later:
+        rows.append(f"| Later pile | {len(later)} notes, median {round(_median(later))} days old |")
+    rows.append(f"| Open notes older than a week | {stale} |")
+    out.append("\n### Snoozing and putting off\n\n| Measure | Value |\n|---|---|")
+    out += rows
+    return "\n".join(out) + "\n"
+
+
 def thought_rows(store):
     """Every thought ever parked (minus deleted ones), rebuilt from the thought log with the current state on
     top: one dict per thought (title, list, captured_at, *_ever flags, outcome, resolved_at...). Used by the
@@ -1876,7 +2027,7 @@ def thought_rows(store):
                                   "dist_ever": False, "urgent_ever": False, "later": False,
                                   "glimmer_ever": False, "antiglimmer_ever": False, "idea_ever": False,
                                   "itch_acted_count": 0, "itch_acted_minutes": 0,
-                                  "music": None, "flags_ever": [],
+                                  "music": None, "flags_ever": [], "reminder_snoozes": 0,
                                   "outcome": "open", "resolved_at": ""})
         kind = ev.get("event")
         if kind == "captured":
@@ -1938,6 +2089,8 @@ def thought_rows(store):
                      attachments=", ".join(ev.get("attachments", [])) or r["attachments"])
         elif kind == "abandoned":
             r["outcome"] = "abandoned"
+        elif kind == "reminder":
+            r["reminder_snoozes"] += str(ev.get("answer", "")).startswith("snooze")
     # current state wins for thoughts that still exist
     for l in store.lists:
         for t in l["tasks"]:
@@ -1982,7 +2135,7 @@ def build_ai_export(store, days=None, include_analyses=True, calendar_events=Non
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(["captured_at", "weekday", "hour", "list", "source", "timer_state", "focus_minute",
                 "focus_planned_min", "title", "details", "attachments", "urgent", "distraction", "urge", "itch_acted_count", "itch_acted_minutes", "lift", "drain", "idea", "my_flags", "music", "outcome", "resolved_at",
-                "hours_to_resolve"])
+                "hours_to_resolve", "reminder_snoozes"])
     n_focus = n_done = n_urge = n_urge_done = n_dist = n_dist_focus = 0
     states = {}
     for r in out:
@@ -2010,7 +2163,7 @@ def build_ai_export(store, days=None, include_analyses=True, calendar_events=Non
                     "" if not r.get("music") else (f"playing ({r['music'].get('app') or '?'})"
                                                    if r["music"].get("playing") else "not playing"),
                     r["outcome"],
-                    resolved.strftime("%Y-%m-%d %H:%M") if resolved else "", hours])
+                    resolved.strftime("%Y-%m-%d %H:%M") if resolved else "", hours, r["reminder_snoozes"]])
 
     sessions = [x for x in read_jsonl(FOCUS_LOG, RESCUE_DIR / "focus_log.rescue.jsonl")
                 if cutoff is None or (when(x.get("end", "")) and when(x["end"]).timestamp() >= cutoff)]
@@ -2119,7 +2272,7 @@ def build_ai_export(store, days=None, include_analyses=True, calendar_events=Non
                      round((next_due.timestamp() - due.timestamp()) / 3600, 1) if due and next_due else "",
                      item.get("done_at") or ""])
     earlier = analyses_section(days) if include_analyses else ""
-    text = (AI_PROMPT + "\n" + earlier + summary + "\n## Thoughts (CSV)\n\n```csv\n" + buf.getvalue() + "```\n\n"
+    text = (AI_PROMPT + "\n" + earlier + summary + "\n" + rhythm_section(out, sessions, days) + "\n## Thoughts (CSV)\n\n```csv\n" + buf.getvalue() + "```\n\n"
             "## Focus sessions (CSV)\n\n```csv\n" + sbuf.getvalue() + "```\n\n"
             "## Important work (current snapshot, CSV)\n\n```csv\n" + workbuf.getvalue() + "```\n"
             + ("\n## Calendar events (CSV)\n\n```csv\n" + cal_buf.getvalue() + "```\n"
@@ -5451,23 +5604,54 @@ def cloud_path(c, B):
     return path
 
 
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
+
+
+def icon_pixmap(size):
+    """A white thought cloud on a maroon rounded square (readable on light and dark)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    shade = QLinearGradient(0, 0, 0, size)
+    shade.setColorAt(0, QColor(C["accent"]).lighter(118))
+    shade.setColorAt(1, QColor(C["accent"]).darker(112))
+    p.setBrush(shade)
+    p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
+    p.setBrush(QColor("#ffffff"))
+    p.translate(size * 0.03, -size * 0.07)  # keeps the trailing bubbles inside the rounded corner
+    p.drawPath(cloud_path(size * 0.53, size * 0.34))
+    p.end()
+    return pm
+
+
 def app_icon():
-    """Taskbar / Alt+Tab icon: a white thought cloud on a maroon rounded square (readable on light and dark)."""
+    """Taskbar / Alt+Tab icon."""
     from PySide6.QtGui import QIcon
     icon = QIcon()
-    for size in (16, 24, 32, 48, 64, 128, 256):
-        pm = QPixmap(size, size)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(C["accent"]))
-        p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
-        p.setBrush(QColor("#ffffff"))
-        p.drawPath(cloud_path(size * 0.53, size * 0.36))
-        p.end()
-        icon.addPixmap(pm)
+    for size in ICON_SIZES:
+        icon.addPixmap(icon_pixmap(size))
     return icon
+
+
+def write_icon(path):
+    """The app icon as a Windows .ico (one PNG per size), for the installer's desktop and Start menu shortcuts."""
+    import struct
+    from PySide6.QtCore import QBuffer, QByteArray
+    pngs = []
+    for size in ICON_SIZES:
+        data = QByteArray()
+        buf = QBuffer(data)
+        buf.open(QBuffer.WriteOnly)
+        icon_pixmap(size).save(buf, "PNG")
+        pngs.append(bytes(data))
+    head = struct.pack("<HHH", 0, 1, len(pngs))
+    offset = len(head) + 16 * len(pngs)
+    for size, png in zip(ICON_SIZES, pngs):
+        head += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), offset)  # 0 means 256
+        offset += len(png)
+    Path(path).write_bytes(head + b"".join(pngs))
 
 
 # ---------------------------------------------------------------- attachment tile
@@ -6746,6 +6930,11 @@ class NoteAlarmManager(QObject):
         """snooze_minutes: minutes to snooze, 0 to stop, or "open" / "done" (both also stop it). A repeating
         reminder never stops here: it moves on to its next time, and "done" leaves the note open."""
         self.active.pop(task["id"], None)
+        try:
+            self.store.log_event("reminder", task, answer=f"snooze {snooze_minutes}" if isinstance(
+                snooze_minutes, int) and snooze_minutes else str(snooze_minutes or "stop"))
+        except Exception as e:
+            log_error(f"reminder log failed: {e}")
         reminder = task.get("reminder") or {}
         repeats = bool(repeat_text(reminder.get("repeat")))
         if isinstance(snooze_minutes, int) and snooze_minutes:
@@ -15044,6 +15233,9 @@ def main():
     app.installEventFilter(tip_gate)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(app_icon())
+    if "--write-icon" in sys.argv:            # the installer asks for the shortcut icon, then we're done
+        write_icon(sys.argv[sys.argv.index("--write-icon") + 1])
+        return
     if IS_WIN:
         f = QFont("Segoe UI Variable Text")
         if not QFont(f).exactMatch():

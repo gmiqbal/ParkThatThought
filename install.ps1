@@ -63,6 +63,8 @@
         return
     }
 
+    $ico = Join-Path $dir "ParkThatThought.ico"
+    & $vpy $script --write-icon $ico 2>$null   # the app draws its own cloud icon for the shortcuts
     $shell = New-Object -ComObject WScript.Shell
     # the desktop icon also brings the cloud back if it ever goes missing
     foreach ($folder in [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("Desktop")) {
@@ -71,6 +73,7 @@
         $lnk.Arguments = "`"$script`""
         $lnk.WorkingDirectory = $dir
         $lnk.Description = "Park stray thoughts during focus"
+        if (Test-Path $ico) { $lnk.IconLocation = "$ico,0" }
         $lnk.Save()
     }
 

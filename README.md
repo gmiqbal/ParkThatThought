@@ -121,7 +121,7 @@ The **♫** button plays brown, pink or white noise made by the app (no sound fi
 
 ### Copy your patterns for AI
 
-Every thought you park is logged on your PC: when it came, what the timer was doing, and what you did with it. The **✨** button copies the last 7 days, 30 days or everything as a ready-made prompt for any AI chat: what pulls you away, when, where your focus time goes, and one or two small experiments to try. Paste the answer back in to keep it.
+Every thought you park is logged on your PC: when it came, what the timer was doing, and what you did with it. The **✨** button copies the last 7 days, 30 days or everything as a ready-made prompt for any AI chat: the app first counts your rhythm (best hours and weekdays, streaks, late nights, rounds in a row, the minute thoughts start pulling, what you keep snoozing), and the prompt asks for patterns you probably haven't noticed, each in a small table, ending with a few small changes to try next week. Paste the answer back in to keep it.
 
 <img src="docs/ai.png" width="642" alt="The AI menu: copy last 7 days, 30 days, everything, and saved analyses">
 
