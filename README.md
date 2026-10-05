@@ -12,7 +12,7 @@ You're in the middle of something and a thought pops up: "look this up", "reply 
 
 **Watch the 2 minute intro:**
 
-[<img src="docs/intro.png" width="848" alt="Watch the 2 minute intro video">](https://github.com/gmiqbal/ParkThatThought/raw/main/docs/intro.mp4)
+https://github.com/user-attachments/assets/a64c7b7c-dccb-46dc-8da6-4e4af4c51c2d
 
 <img src="docs/list.png" width="848" alt="The list in dark and light mode, with a focus round running">
 
