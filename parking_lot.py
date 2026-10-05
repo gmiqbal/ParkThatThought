@@ -69,7 +69,9 @@ from PySide6.QtWidgets import QFileDialog
 from PySide6.QtWidgets import QColorDialog
 from PySide6.QtWidgets import QSpinBox, QSizeGrip
 
-APP_DIR = Path(__file__).resolve().parent
+FROZEN = getattr(sys, "frozen", False)   # the Windows installer's exe: notes go where the script install keeps them
+APP_DIR = (Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkThatThought" if FROZEN
+           else Path(__file__).resolve().parent)
 DATA_DIR = APP_DIR / "parking_lot_data"
 MUSIC_DIR = APP_DIR / "music"         # songs the owner drops in; played on repeat from the circle's menu
 ATT_DIR = DATA_DIR / "attachments"
@@ -80,10 +82,11 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Park stray thoughts, files and images. Get back to work."
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 APP_AUTHOR = "G M Iqbal Mahmud"
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
+RELEASES_URL = GITHUB_URL + "/releases/latest"   # where the exe updates itself from: the newest installer
 COFFEE_URL = "https://buymeacoffee.com/gmiqbal"   # About > Buy me a coffee
 RESCUE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkingLotRescue"
 RESCUE_FILE = RESCUE_DIR / "tasks.rescue.json"
@@ -15149,6 +15152,8 @@ class HotkeyDialog(QDialog):
 def update_script(path=None):
     """Restart / update: swap in the newest parking_lot.py from GitHub. Only this file changes; notes stay.
     A git checkout (someone working on the code) is left alone. Returns updated, current, dev or failed."""
+    if FROZEN:
+        return "exe"                    # an installed exe can't swap its own code; restart() opens the download page
     path = Path(path or __file__).resolve()
     if (path.parent / ".git").exists():
         return "dev"
@@ -15439,10 +15444,12 @@ def main():
         status = update_script()
         exe = Path(sys.executable)
         pyw = exe.with_name("pythonw.exe")
-        if IS_WIN and pyw.exists():
+        if IS_WIN and pyw.exists() and not FROZEN:
             exe = pyw  # no console window
-        if QProcess.startDetached(str(exe), [str(Path(__file__).resolve()), "--replace", f"--update={status}"],
-                                  str(APP_DIR)):
+        if status == "exe":
+            QDesktopServices.openUrl(QUrl(RELEASES_URL))
+        args = [] if FROZEN else [str(Path(__file__).resolve())]
+        if QProcess.startDetached(str(exe), args + ["--replace", f"--update={status}"], str(APP_DIR)):
             hard_quit()
         else:
             toast("Couldn't restart. Quit, then open Park That Thought again.")
@@ -16009,7 +16016,8 @@ def main():
         lock.unlock()
     app.aboutToQuit.connect(on_quit)
     said = {"--update=updated": "Updated to the newest version.", "--update=current": "You have the newest version.",
-            "--update=failed": "Couldn't reach GitHub, so no update this time."}
+            "--update=failed": "Couldn't reach GitHub, so no update this time.",
+            "--update=exe": "To update, run the newest installer from the page that just opened. Notes stay."}
     for arg in sys.argv:
         if arg in said:
             QTimer.singleShot(1500, lambda m=said[arg]: toast(m))

@@ -28,15 +28,17 @@ It is not a full task manager. There's no account, no cloud sync and no phone ap
 
 ## Install (about 2 minutes)
 
-Open **Command Prompt** or **PowerShell** (press Start, type `cmd`, press Enter), paste this line and press Enter:
+1. Download **[ParkThatThought-Setup.exe](https://github.com/gmiqbal/ParkThatThought/releases/latest/download/ParkThatThought-Setup.exe)** (about 40 MB).
+2. Open it. Windows may say "Windows protected your PC" because the app isn't signed (signing costs money every year). Click **More info** > **Run anyway**.
+3. A cloud appears on the right edge of your screen. The installer adds Start menu, desktop and startup shortcuts. No admin rights and no Python needed.
+
+**Or, if you already use Python:** paste this in Command Prompt. Some antivirus apps flag any "download and run" command line like this one, even a harmless one, so the exe is the easier choice.
 
 ```
 powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | Out-String | iex"
 ```
 
-That's it. A cloud appears on the right edge of your screen.
-
-What the installer does (you can [read it here](install.ps1), it's short):
+What the command line does (you can [read it here](install.ps1), it's short):
 
 1. Finds Python 3.9 or newer. If you don't have it, installs Python 3.12 with winget (Windows' own app installer).
 2. Puts the app in `%LOCALAPPDATA%\ParkThatThought` with its own private Python environment, and installs its two libraries, PySide6 and pynput (about 200 MB the first time).
@@ -161,11 +163,16 @@ Everything works from the keyboard.
 
 ## Updating
 
-Right-click the cloud > **Restart / update**. It downloads the newest version from this page and restarts. Your notes stay as they are, and the previous version is kept as `parking_lot.py.bak`.
+Right-click the cloud > **Restart / update**.
 
-Or run the install line again.
+- Installed with the exe: it opens the download page. Run the newest installer; your notes stay.
+- Installed with the command line: it downloads the newest version and restarts. Your notes stay as they are, and the previous version is kept as `parking_lot.py.bak`. Or run the install line again.
 
 ## Uninstall
+
+Installed with the exe: Settings > Apps > Installed apps > **Park That Thought** > Uninstall. Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data` until you delete that folder.
+
+Installed with the command line:
 
 1. Right-click the cloud > **Quit**.
 2. Press `Win+R`, type `shell:startup`, press Enter, and delete **Park That Thought**. Do the same with `shell:programs`, and delete the desktop icon.
