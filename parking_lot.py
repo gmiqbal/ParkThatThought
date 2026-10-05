@@ -87,7 +87,8 @@ APP_AUTHOR = "G M Iqbal Mahmud"
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
 LATEST_API = "https://api.github.com/repos/gmiqbal/ParkThatThought/releases/latest"   # the exe's Restart / update
-SETUP_PATH = Path(os.environ.get("TEMP", str(APP_DIR))) / "ParkThatThought-Setup.exe"   # newer installer lands here
+SETUP_NAME = "ParkThatThought-Setup.exe"   # the installer attached to each GitHub release
+SETUP_PATH = Path(os.environ.get("TEMP", str(APP_DIR))) / SETUP_NAME   # a newer one lands here
 COFFEE_URL = "https://buymeacoffee.com/gmiqbal"   # About > Buy me a coffee
 RESCUE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkingLotRescue"
 RESCUE_FILE = RESCUE_DIR / "tasks.rescue.json"
@@ -15191,7 +15192,7 @@ def update_exe():
             rel = json.load(r)
         if _version(rel["tag_name"]) <= _version(APP_VERSION):
             return "current"
-        url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == SETUP_PATH.name)
+        url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == SETUP_NAME)
         if not url.startswith(GITHUB_URL + "/releases/download/"):
             raise ValueError(f"unexpected download link {url}")
         with urllib.request.urlopen(url, timeout=30) as r:
