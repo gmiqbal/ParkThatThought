@@ -70,7 +70,7 @@ Need the note itself in a message? Hover it and click the copy icon at the start
 
 ### Your calendar, floating on the taskbar
 
-Connect Google Calendar (Settings > Calendar, with a private calendar link) and a small bar shows the current or next meeting with a countdown. It sits on the taskbar, or drag it anywhere to float. Click it for a three-day view with your events in their own colors. **+** opens a new event in Google Calendar, **Meet** starts a Google Meet.
+Connect your Google account (the first-start tour asks, or Settings > Calendar > **Connect with Google**) and a small bar shows the current or next meeting with a countdown. It sits on the taskbar, or drag it anywhere to float. Click it for a three-day view with your events in their own colors. All-day events sit in a strip under the dates. **+** adds an event with a description, a calendar and a color; **Instant meet** starts a Google Meet call right away. Hover an event for a quick look; click it to edit, copy it or copy its link to share. Calls show **Join** on their block, and on the bar when they are now or next. The camera button on the bar opens a private **Camera check**: check your camera and mic before a call, record 5 seconds to hear yourself, and save a **Daily photo** with the date and time. **Guide** frames each day the same, and **Timelapse** plays them back and makes a video. The bar's **+** adds an event without opening the calendar.
 
 <img src="docs/calendar-bar.png" width="690" alt="The floating meeting bar and the three-day calendar above it">
 
@@ -208,3 +208,5 @@ I build Park That Thought in my spare time and keep it free. If it saves you som
 ## License
 
 MIT. Made by G M Iqbal Mahmud.
+
+The Windows app includes Qt for Python and pynput (LGPL v3) and FFmpeg (LGPL 2.1 or later). Their notices and licenses are in the install folder: Settings > About > Open source parts > View.
