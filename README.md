@@ -16,7 +16,11 @@ https://github.com/user-attachments/assets/a64c7b7c-dccb-46dc-8da6-4e4af4c51c2d
 
 <img src="docs/list.png" width="848" alt="The list in dark and light mode, with a focus round running">
 
-**Contents:** [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source) · [Support](#support)
+**Contents:** [Why I made it](#why-i-made-it) · [Who it's for](#who-its-for) · [Install](#install-about-2-minutes) · [Tour](#a-quick-tour) · [Drop shelf](#a-drop-shelf-for-files-snips-and-links) · [Calendar](#your-calendar-floating-on-the-taskbar) · [Focus](#focus-rounds) · [Keys](#keys-and-clicks) · [Privacy](#privacy) · [Updating](#updating) · [Uninstall](#uninstall) · [Questions](#questions) · [Run from source](#run-from-source) · [Support](#support)
+
+## Why I made it
+
+I made it in grad school. I was juggling courses, a research project, chores and my hobbies, and while I worked on one thing, thoughts about the others kept showing up. Acting on one might take five minutes, but it cost me the focus I had on the task in front of me, and getting that back took much longer. So I wanted a place to drop the thought in two seconds and trust it would be there at the break. That's this app. The focus timer, the floating meeting bar and the camera check came later, built on the same idea.
 
 ## Who it's for
 
@@ -70,29 +74,29 @@ Need the note itself in a message? Hover it and click the copy icon at the start
 
 ### Your calendar, floating on the taskbar
 
-Connect your Google account (the first-start tour asks, or Settings > Calendar > **Connect with Google**) and a small bar shows the current or next meeting with a countdown. It sits on the taskbar, or drag it anywhere to float. Click it for a three-day view with your events in their own colors. All-day events sit in a strip under the dates. **+** adds an event with a description, a calendar and a color; **Instant meet** starts a Google Meet call right away. Hover an event for a quick look; click it to edit, copy it or copy its link to share. Calls show **Join** on their block, and on the bar when they are now or next. The camera button on the bar opens a private **Camera check**: check your camera and mic before a call, record 5 seconds to hear yourself, and save a **Daily photo** with the date and time. **Guide** frames each day the same, and **Timelapse** plays them back and makes a video. The bar's **+** adds an event without opening the calendar.
+Connect your Google account (the welcome tour asks, or Settings > Calendar > **Connect with Google**) and a small bar shows the current or next meeting with a countdown. It sits on the taskbar, or drag it anywhere to float. Click it for a three-day view with your events in their own colors. All-day events sit in a strip under the dates. **+** adds an event with a description, a calendar and a color; **Instant meet** starts a Google Meet call right away. Hover an event for a quick look; click it to edit, copy it or copy its link to share. Calls show **Join** on their block, and on the bar when they are now or next. The camera button on the bar (or right-click the cloud > **Camera check...**) opens a private **Camera check**: pick your camera, mic and speaker, check them before a call, record 5 seconds to hear yourself, and save a **Daily photo** with the date and time. **Guide** frames each day the same, and **Timelapse** plays them back and makes a video. The bar's **+** adds an event without opening the calendar.
 
 <img src="docs/calendar-bar.png" width="690" alt="The floating meeting bar and the three-day calendar above it">
 
-A few minutes before a meeting, a heads-up card glides out with **Join** when there's a call link. You pick the times (30, 10 and 5 minutes before, by default).
+A few minutes before a meeting, a small note fades in by the cloud with the time and the meeting name, then fades out on its own after a few seconds. No buttons, no sound, never steals focus. You pick the times (30, 10 and 5 minutes before, by default). Join is on the meeting bar.
 
-<img src="docs/meeting-heads-up.png" width="460" alt="Meeting heads-up card: in 10 min, Team planning">
+<img src="docs/meeting-heads-up.png" width="460" alt="Meeting heads-up note: in 10 min, Team planning">
 
 Your notes are never sent to Google.
 
 ### Focus rounds
 
-Press **Focus** in the list. The cloud shows the countdown on its outline and asks what the round is for: the meeting coming up, your recent answers, or your own. Link focus and break, and the break starts by itself. While it runs: **Pause**, **Stop**, and **Drifted** to take out minutes you drifted off.
+Press **Focus** in the list. The cloud shows the countdown on its outline and asks what you're working on: type it, pick the meeting coming up or a recent answer, or skip. Link focus and break, and the break starts by itself. While it runs: **Pause**, **Stop**, and **Drifted** to take out minutes you drifted off (it confirms with "Noted").
 
 <img src="docs/focus-round.png" width="451" alt="What's this round for? with one-click answers">
 
-At the end, a card shows what you did. With app tracking on, it lists the apps you used, and you mark the ones that distracted you this round. **Take out** removes those minutes. Then pick a break or another round.
+At the end, a card shows what you did. With app tracking on, it lists the apps you used, and you mark the ones that distracted you this round. **Take out** removes those minutes and shows your net focus. Then pick a break or another round.
 
 <img src="docs/session-card.png" width="476" alt="Focus complete card with app buttons, Take out 2 min, Start break and Focus again">
 
 ### Check-ins
 
-After a long stretch at the computer without a focus round (every 45 minutes by default), the cloud asks a short question: start a focus round, take a break, log a round you forgot to time, or tell it you're on track. With Calendar connected it can mention what's coming up. Number keys answer it.
+After a long stretch at the computer without a focus round (every 45 minutes by default), the cloud asks a short question: start a focus round, take a break, log a round you forgot to time, say another task came up, tell it you're on track, or ask later. With Calendar connected it can mention what's coming up. Number keys answer it.
 
 <img src="docs/check-in.png" width="462" alt="Check-in: Office hours starts in 1h 24m. Want a focus round before then?">
 
@@ -100,13 +104,13 @@ It stays quiet during calls (mic or camera in use), full screen and presentation
 
 ### Water and eye breaks
 
-During focus, a tiny character peeks out from behind the cloud: a sip of water every 40 minutes, a look into the distance every 20. It ducks back after a few seconds and clicks pass through it. Optional: a soft sound first, and a 20 second look-away countdown.
+While you use the laptop, a tiny character peeks out from behind the cloud: a look into the distance every 20 minutes, a sip of water every 40. Never in the first 3 minutes of a focus round. Settings can limit it to focus rounds only. It ducks back after a few seconds and clicks pass through it. Optional: a soft sound first, and a 20 second look-away countdown.
 
 <img src="docs/peek.png" width="185" alt="A water peek: Sip of water?">
 
 ### Reminders
 
-Add `20m`, `in 1 hour` or `at 3:30 pm` to any note, or press the bell. When it's due, a card grows out of the cloud with snooze buttons, **Open note** and **Done**. Reminders can repeat: every day, weekdays, every week, chosen days or every month.
+Add `20m`, `in 1 hour` or `at 3:30 pm` to any note, or press the bell. When it's due, a card grows out of the cloud with snooze buttons, **Open note** and **Done**. Reminders can repeat: every day, weekdays, every week, chosen days or every month. Several due at once share one card: a row per note, plus **Snooze all** and **Stop all**.
 
 <img src="docs/reminder.png" width="569" alt="Reminder card: Buy coffee beans, with snooze, Open note and Done">
 
@@ -128,7 +132,7 @@ Every thought you park is logged on your PC: when it came, what the timer was do
 
 ### Make it yours
 
-System, Light or Dark theme (System follows Windows). Pick the cloud's color, shape (thought cloud, circle, squircle and more) and size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy.
+System, Light or Dark theme (System follows Windows). The cloud starts white with the time left on its outline; pick its color, shape (thought cloud, circle, squircle and more) and size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy.
 
 <img src="docs/settings-appearance.png" width="800" alt="Settings, Appearance page">
 
@@ -143,7 +147,7 @@ System, Light or Dark theme (System follows Windows). Pick the cloud's color, sh
 | Park a file, image or link | Drag it onto the cloud, or `Ctrl+V` a screenshot in the quick note. |
 | Use a parked file | Drag it out of the note, or hover it and click copy. |
 | Copy a note into a message | Hover it and click the copy icon, or select it and press `Ctrl+C`. |
-| Get help | **?** in the list: how it works and a 1 minute tour. |
+| Get help | **?** in the list: how it works and the welcome tour. |
 | Settings, timer, nap, quit | Right-click the cloud. |
 
 Everything works from the keyboard.
@@ -153,12 +157,14 @@ Everything works from the keyboard.
 - **Your notes stay on your PC**, in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`. No account, no server, no tracking.
 - **Hidden from screen share and screenshots** by default (Zoom, Teams, Meet, OBS, Snipping Tool). You can turn this off.
 - **App tracking during focus rounds** (on by default, turn it off in Settings > Focus & breaks) notes which app is in front so the end-of-round card can ask which ones distracted you. It never leaves your PC.
-- **The internet is used only when you ask for it:** downloading, **Restart / update**, and, if you turn them on, Google Calendar and phone alerts through ntfy.sh (timer messages only, never your notes).
+- **The internet is used only for:** downloading, updates (**Restart / update**, and the automatic check unless you turn it off), and, if you turn them on, Google Calendar and phone alerts through ntfy.sh (timer messages only, never your notes).
 - **Copy for AI** only copies text to your clipboard. You decide where to paste it.
 
 ## Updating
 
-Right-click the cloud > **Restart / update**. If there's a newer version, it downloads it, installs it quietly and starts again, in about a minute. No blue box, nothing to click.
+It updates itself. Every few hours it checks GitHub, and when a new version is out it installs it while you're away from the keyboard and no focus round is running. Next time you look, the cloud says what changed. Turn it off in Settings > About > **Update automatically**.
+
+To update right now: right-click the cloud > **Restart / update** (also on the meeting bar's right-click menu). If there's a newer version, it downloads it, installs it quietly and starts again, in about a minute. No blue box, nothing to click.
 
 Downloading the installer again from this page and running it works too. Either way **your notes, settings and files stay**: they live in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, which installing never touches. No setup again.
 

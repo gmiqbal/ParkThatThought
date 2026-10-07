@@ -98,6 +98,9 @@ CHANGELOG = (   # Settings > About > Update log, newest first; the top one is AP
     ("1.1", "4 Oct 2026", ("First public release.",)),
 )
 APP_AUTHOR = "G M Iqbal Mahmud"
+APP_STORY = ("Made in grad school. Juggling courses, research, chores and hobbies, I kept thinking about one "
+             "project while working on another. Acting on it took five minutes and cost the focus I had. "
+             "So: park it, get back to work.")
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
 LATEST_API = "https://api.github.com/repos/gmiqbal/ParkThatThought/releases/latest"   # the exe's Restart / update
@@ -477,7 +480,7 @@ def presence_decision(fg_class, fg_rect, fg_monitor_rect, same_monitor, is_ours,
     covers = (fg_rect is not None and fg_monitor_rect is not None and
               fg_rect[0] <= fg_monitor_rect[0] and fg_rect[1] <= fg_monitor_rect[1] and
               fg_rect[2] >= fg_monitor_rect[2] and fg_rect[3] >= fg_monitor_rect[3])
-    return "hide" if ((covers and not standard_maximized) or exclusive_fullscreen) else "show"
+    return "hide" if covers and (exclusive_fullscreen or not standard_maximized) else "show"
 
 
 def bubble_home(bubble):
@@ -503,6 +506,7 @@ class PresenceGuard(QObject):
         self.visibility_changed = lambda: None
         self.rescue = lambda: None        # brings the circle back if it ended up off every screen
         self.ok = False
+        self._noted = set()               # (what, window class) already written to the error log
         if not IS_WIN:
             return
         try:
@@ -523,12 +527,27 @@ class PresenceGuard(QObject):
             u.IsIconic.argtypes = [wintypes.HWND]
             u.IsZoomed.argtypes = [wintypes.HWND]
             u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            u.WindowFromPoint.argtypes = [wintypes.POINT]
+            u.WindowFromPoint.restype = wintypes.HWND
+            u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            u.GetAncestor.restype = wintypes.HWND
             self.u = u
             self.qt = QTimer(self)
             self.qt.setInterval(500)
             self.qt.timeout.connect(self._check)
             self.qt.start()
             self.ok = True
+            if QGuiApplication.platformName() != "offscreen":
+                # Another app came to the front (a taskbar click, Alt+Tab): check now, and again as the taskbar
+                # settles, instead of on the next tick. That is what kept the docked bar flashing.
+                proc = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, wintypes.LONG,
+                                          wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+                self._on_front = proc(lambda *a: [QTimer.singleShot(ms, self._check) for ms in (0, 150, 400)])
+                u.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE, proc,
+                                              wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+                u.SetWinEventHook.restype = wintypes.HANDLE
+                self._hook = u.SetWinEventHook(3, 3, None, self._on_front, 0, 0, 2)
+                # EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
         except Exception as e:
             log_error(f"presence guard unavailable: {e}")
 
@@ -544,6 +563,49 @@ class PresenceGuard(QObject):
             return hmon, None
         r = mi.rcMonitor
         return hmon, (r.left, r.top, r.right, r.bottom)
+
+    def _note(self, what, cls):
+        """One line in the error log per kind of window, so a cloud that went missing can be traced."""
+        if (what, cls) not in self._noted:
+            self._noted.add((what, cls))
+            log_error(f"presence: {what} {cls}")
+
+    def _ghost(self, hwnd):
+        """An invisible or cloaked window (another virtual desktop, an app closing) can hold the foreground
+        while you see something else. It covers nothing, so it never hides the circle."""
+        try:
+            if not self.u.IsWindowVisible(hwnd):
+                return True
+            v = self.ct.c_int(0)
+            return (self.ct.windll.dwmapi.DwmGetWindowAttribute(self.wt.HWND(hwnd), 14, self.ct.byref(v), 4) == 0
+                    and bool(v.value))  # DWMWA_CLOAKED
+        except Exception:
+            return False
+
+    def _buried(self, hwnd):
+        """True when our always-on-top window lost that bit, or another app's window sits over its middle
+        (the taskbar after a click, another always-on-top window). The caller then puts it back on top."""
+        try:
+            u, ct, wt = self.u, self.ct, self.wt
+            if not u.GetWindowLongW(hwnd, -20) & 0x8:  # WS_EX_TOPMOST
+                self._note("lost always on top:", "ours")
+                return True
+            rc = wt.RECT()
+            if not u.GetWindowRect(hwnd, ct.byref(rc)):
+                return False
+            top = u.GetAncestor(u.WindowFromPoint(wt.POINT((rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2)), 2)
+            if not top or int(top) == int(hwnd):
+                return False
+            pid = wt.DWORD()
+            u.GetWindowThreadProcessId(ct.c_void_p(int(top)), ct.byref(pid))
+            if pid.value == os.getpid():
+                return False                  # our own popup (menu, tooltip, the list) is fine
+            buf = ct.create_unicode_buffer(256)
+            u.GetClassNameW(top, buf, 256)
+            self._note("covered by", buf.value)
+            return True
+        except Exception:
+            return False
 
     def _quns_d3d_fullscreen(self):
         try:
@@ -572,10 +634,14 @@ class PresenceGuard(QObject):
             exclusive_fullscreen = self._quns_d3d_fullscreen()
             decision = presence_decision(buf.value, fg_rect, mon_rect, fg_mon == my_mon, ours,
                                          exclusive_fullscreen and fg_mon == my_mon, ordinary_maximized)
+            ghost = decision == "hide" and self._ghost(fg)
+            if ghost:
+                decision = "show"
             # the circle first, so a problem with the meeting bar can never keep it hidden
             if decision == "hide" and self.enabled_fs:
                 if not self.hidden_for_fs:
                     self.hidden_for_fs = True
+                    self._note("hid the circle for full screen:", buf.value)
                     self.bubble.hide()
                     self.visibility_changed()
             else:
@@ -584,7 +650,7 @@ class PresenceGuard(QObject):
                     self.bubble.show()
                     self.visibility_changed()
                 self.rescue()
-                if decision == "raise" or not u.IsWindowVisible(me) or u.IsIconic(me):
+                if decision == "raise" or not u.IsWindowVisible(me) or u.IsIconic(me) or self._buried(me):
                     u.ShowWindow(me, 4)  # SW_SHOWNOACTIVATE
                     u.SetWindowPos(me, wt.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
                     # HWND_TOPMOST, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
@@ -594,6 +660,8 @@ class PresenceGuard(QObject):
                 bar_mon, _ = self._monitor_rect(wt.HWND(int(bar.winId())))
                 bar_decision = presence_decision(buf.value, fg_rect, mon_rect, fg_mon == bar_mon, ours,
                                                  exclusive_fullscreen and fg_mon == bar_mon, ordinary_maximized)
+                if ghost:
+                    bar_decision = "show"
                 bar.set_fullscreen_suppressed(bar_decision == "hide")
                 if bar_decision != "hide" and bar.wants_visible():
                     if not bar.isVisible():
@@ -601,7 +669,8 @@ class PresenceGuard(QObject):
                     bh = wt.HWND(int(bar.winId()))
                     dock_refresh = (bar.placement == "taskbar" and bar._dock_signature and
                                     time.monotonic() - bar._last_dock_raise >= 2)
-                    if bar_decision == "raise" or not u.IsWindowVisible(bh) or u.IsIconic(bh) or dock_refresh:
+                    if (bar_decision == "raise" or not u.IsWindowVisible(bh) or u.IsIconic(bh) or dock_refresh or
+                            self._buried(bh)):
                         u.ShowWindow(bh, 4)
                         u.SetWindowPos(bh, wt.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
                         if dock_refresh:
@@ -3126,8 +3195,8 @@ class Confetti(QWidget):
 
 
 # ---------------------------------------------------------------- boosts and check-ins
-# said when a focus session starts. START_NUDGES help you begin (for people who put things off);
-# FLOW_BOOSTS are for people who don't. The "procrastinator" setting picks the mix.
+# said when a focus session starts: START_NUDGES help you begin, FLOW_BOOSTS keep you going. Everyone gets the mix.
+# (Old settings files may still hold a "procrastinator" key; it is unused.)
 START_NUDGES = [
     "Be curious, not perfect.", "Just the first tiny step.", "What's interesting here?",
     "Small enough to start. Go.", "Explore, don't grind.", "Stuck? Make it smaller.",
@@ -3136,9 +3205,11 @@ START_NUDGES = [
     "Tiny step, then another.", "Poke at it. See what happens.", "Ask it a question.",
     "Done beats perfect today.", "Start ugly. Fix later.", "Get curious about the hard part.",
     "Open the file. That's the whole first step.", "Two minutes counts. Start the two minutes.",
-    "Motivation shows up after you start, not before.", "Lower the bar until you can step over it.",
-    "You're not writing it. You're just sketching it.", "Bad version first. Good version is a sequel.",
+    "Start first. Motivation catches up.", "Lower the bar until you can step over it.",
+    "Not writing it. Just sketching it.", "Bad version first. Good version is a sequel.",
     "Pick the easiest corner of the hard thing.", "Nobody's grading this draft.",
+    "Rough is fine. Go.", "Write one line. Any line.", "Warm up with the easy bit.",
+    "Start in the middle if that's easier.", "Make the first move small.", "Just the next five minutes.",
 ]
 FLOW_BOOSTS = [
     "Deep work mode. See you at the break.", "Phone face down, brain face up.", "One thing, all the way in.",
@@ -3147,35 +3218,56 @@ FLOW_BOOSTS = [
     "Make this block count.", "Clear runway. Take off.", "You know the plan. Run it.",
     "Stray thought? Park it, don't chase it.", "Single-tasking like it's a sport.",
     "The world can wait a few minutes.", "Let's make future you smug.", "Focus on. Tabs off.",
+    "Just this, for now.", "Off you go.", "Notifications can wait.", "One tab. One task.",
+    "The lot catches the rest.", "Slow is fine. Just stay.",
 ]
-FOCUS_BOOSTS = START_NUDGES + FLOW_BOOSTS   # kept for anything that still wants the whole pool
+FOCUS_BOOSTS = START_NUDGES + FLOW_BOOSTS
 # said when you start another focus round soon after the last one ({n} = rounds today, counting this one)
 STREAK_BOOSTS = [
     "Round {n}. You're on a roll.", "Round {n}. At this point it's a habit.", "{n} rounds today. Machine mode.",
     "Back again? Round {n}. Love to see it.", "Round {n}. Your focus is showing off now.",
     "Round {n}. The distractions have filed a complaint.", "Round {n}. Consistency is the cheat code.",
-    "{n} rounds in. Your to-do list is getting scared.", "Round {n}. Momentum is a real thing and you have it.",
+    "{n} rounds in. Your to-do list is getting scared.", "Round {n}. Momentum's on your side.",
     "Round {n}. Keep stacking these.", "Round {n}. You're killing it. Politely.",
-    "Round {n}. Somebody's in the zone.",
+    "Round {n}. Somebody's in the zone.", "Round {n}. Look at you go.", "Round {n}. Back in the chair.",
+    "Round {n}. Same energy, new round.", "Round {n}. Steady wins.",
 ]
 # a one or two word pop on the circle when a quick note is saved
 SAVED_WORDS = ["Saved!", "Gotcha!", "Parked.", "Noted!", "Caught it.", "Got it!", "In the lot.", "Filed!",
-               "Safe here.", "Done. Go.", "Stashed!", "Kept."]
+               "Safe here.", "Done. Go.", "Stashed!", "Kept.", "Parked it.", "Out of your head.", "Safe.",
+               "Holding it."]
+# EmojiFace moves for lines that don't name one; pick_fresh keeps them varied
+LIVELY_ANIMS = ("bounce", "wiggle", "tilt", "jelly", "nod", "sway")
 
 _RECENT = {}
 
 
+def _pick_id(x):
+    return x if isinstance(x, str) else "|".join(map(str, x))      # tuples come back from JSON as lists
+
+
 def pick_fresh(items, key):
-    """random.choice that avoids repeating the last several picks from the same pool."""
+    """random.choice that avoids the last half of picks from the same pool. remember_picks() keeps this
+    memory in the settings, so a restart doesn't bring the same line straight back."""
     items = list(items)
     if not items:
         return None
-    seen = _RECENT.setdefault(key, [])
-    fresh = [x for x in items if x not in seen] or items
+    seen = _RECENT.get(key)
+    if not isinstance(seen, list):
+        seen = _RECENT[key] = []
+    fresh = [x for x in items if _pick_id(x) not in seen] or items
     x = random.choice(fresh)
-    seen.append(x)
+    seen.append(_pick_id(x))
     del seen[:-max(1, len(items) // 2)]
     return x
+
+
+def remember_picks(settings):
+    """Load pick_fresh's memory from settings and keep it there (saved whenever the settings are)."""
+    saved = settings.get("recent_picks")
+    if isinstance(saved, dict):
+        _RECENT.update({k: v for k, v in saved.items() if isinstance(v, list)})
+    settings["recent_picks"] = _RECENT
 
 
 def focus_rounds_today(gap_min=45):
@@ -3192,61 +3284,77 @@ def focus_rounds_today(gap_min=45):
     return len(rows), (datetime.now() - last).total_seconds() <= gap_min * 60
 
 
-def boost_line(procrastinator="sometimes"):
+def boost_line():
     """The line said when a focus session starts."""
     n, recent = focus_rounds_today()
     if recent and n >= 1:
         return pick_fresh(STREAK_BOOSTS, "streak").format(n=n + 1)
-    pool = {"yes": START_NUDGES, "no": FLOW_BOOSTS}.get(procrastinator, START_NUDGES + FLOW_BOOSTS)
-    return pick_fresh(pool, "boost")
+    return pick_fresh(FOCUS_BOOSTS, "boost")
 
 
-# (emoji, animation, text). Animations: shake (nervous, tilted vibrating head), bounce, wiggle, float, tilt.
+# (emoji, animation, text). Animations: see EmojiFace.
 CHECKINS = [
-    ("\U0001F440", "tilt", "Hey. Still doing the thing you meant to do?"),
+    ("\U0001F440", "tilt", "Still on what you meant to do?"),
     ("\U0001F914", "tilt", "Quick check: scrolling, or choosing?"),
-    ("\U0001F6CB\uFE0F", "float", "Is this rest or avoidance? Both are allowed. Just notice which."),
-    ("\U0001F9E9", "wiggle", "Stuck? What's the smallest next step? Now make it smaller."),
-    ("\U0001F300", "wiggle", "Worry loop? Try getting curious about it instead of fighting it."),
-    ("\u2728", "float", "What would make the next 10 minutes a little more interesting?"),
-    ("\U0001F4A7", "bounce", "You've been on for a while. Water? Window? Stretch?"),
-    ("\U0001FAB4", "float", "Feeling tense? Name it, then touch one real thing near you."),
+    ("\U0001F6CB\uFE0F", "float", "Rest or avoiding? Both are fine. Just notice."),
+    ("\U0001F9E9", "wiggle", "Stuck? Find the next step. Make it smaller."),
+    ("\U0001F300", "spin", "Worry loop? Get curious instead of fighting it."),
+    ("\u2728", "pulse", "What would make the next 10 minutes more fun?"),
+    ("\U0001F4A7", "jelly", "You've been on for a while. Water? Window? Stretch?"),
+    ("\U0001FAB4", "sway", "Tense? Name it. Touch something near you."),
     ("\U0001F4F1", "shake", "Doom-scroll check. Put it down for one slow breath."),
     ("\U0001F52A", "wiggle", "Too big to start? Slice it until it's almost silly."),
-    ("\U0001F50D", "tilt", "Curious question: what's the interesting part of the thing you're avoiding?"),
-    ("\U0001F9D8", "float", "Checking on you. Shoulders up by your ears?"),
+    ("\U0001F50D", "tilt", "What's the interesting part of the thing you're avoiding?"),
+    ("\U0001F9D8", "sway", "Checking on you. Shoulders up by your ears?"),
     ("\U0001F5C2\uFE0F", "wiggle", "Lots of tabs, few things finished? Pick one."),
-    ("\U0001F9ED", "tilt", "Is this the plan, or did the plan wander off?"),
-    ("\U0001F44B", "wiggle", "Hi, it's your circle. Want to start a small focus round?"),
-    ("\U0001F343", "float", "If your mind is spiralling, a 5 minute break is a real option."),
+    ("\U0001F5FA\uFE0F", "tilt", "Is this the plan, or did the plan wander off?"),
+    ("\U0001F44B", "wiggle", "Hi, it's your circle. Small focus round?"),
+    ("\U0001F343", "float", "Mind spinning? A 5 minute break is allowed."),
     ("\U0001F439", "shake", "Your to-do list is getting nervous. Want to show it who's boss?"),
     ("\U0001F422", "float", "Slow start is still a start. One tiny round?"),
-    ("\U0001F9C3", "bounce", "Hydration check. Your brain is mostly water and open tabs."),
-    ("\U0001F643", "tilt", "Scrolling feels like rest but rarely is. Want a real 5 minute one?"),
-    ("\U0001F440", "shake", "Hmm. Is this the thing, or a thing next to the thing?"),
+    ("\U0001F9C3", "jelly", "Hydration check. Your brain is mostly water and open tabs."),
+    ("\U0001F643", "tilt", "Swap the scroll for a real 5 minute break?"),
+    ("\U0001F928", "shake", "Hmm. Is this the thing, or a thing next to the thing?"),
     ("\U0001F95C", "bounce", "Low battery? A snack and a stretch count as productivity."),
-    ("\U0001F6AA", "wiggle", "The hard task is behind a door. Just open it and look. No need to walk in yet."),
-    ("\U0001F9ED", "float", "Quick compass check: is this where you meant to be?"),
-    ("\U0001F4A1", "bounce", "Got an idea brewing? Park it, then pick one thing."),
-    ("\U0001F3AF", "tilt", "What's the one thing that would make today feel done?"),
+    ("\U0001F6AA", "wiggle", "Just peek at the hard task. No need to start it."),
+    ("\U0001F9ED", "spin", "Compass check: still on course?"),
+    ("\U0001F4A1", "pulse", "Got an idea brewing? Park it, then pick one thing."),
+    ("\U0001F3AF", "nod", "What's the one thing that would make today feel done?"),
     ("\U0001F9F9", "wiggle", "Busy work or real work? No judgment, just asking."),
-    ("\U0001F440", "float", "Eyes tired? Look at something far away for 20 seconds."),
-    ("\U0001F4AC", "tilt", "Been chatting a while? Totally fine. Just checking it's on purpose."),
+    ("\U0001F304", "float", "Eyes tired? Look at something far away for 20 seconds."),
+    ("\U0001F4AC", "tilt", "Chatting a while? Fine. Just checking it's on purpose."),
     ("\U0001F97A", "wiggle", "The task you're avoiding asked about you. It misses you."),
-    ("\U0001F570\uFE0F", "float", "Time check. Where did the last half hour go?"),
+    ("\U0001F570\uFE0F", "float", "Time check. How was the last half hour?"),
     ("\U0001F6B6", "bounce", "Legs asleep? A 2 minute walk resets more than you'd think."),
-    ("\U0001F9E0", "tilt", "Your brain has been busy. Want to give it one clear job?"),
-    ("\U0001F32C\uFE0F", "float", "One slow breath out. Longer than the breath in. Okay, carry on."),
-    ("\U0001F4CC", "bounce", "Anything rattling around up there? Park it and get it off your mind."),
-    ("\U0001F9ED", "tilt", "Another task took priority? You can choose when to return to the plan."),
+    ("\U0001F9E0", "jelly", "Your brain has been busy. Want to give it one clear job?"),
+    ("\U0001F32C\uFE0F", "float", "Breathe out slowly, longer than in. Okay, carry on."),
+    ("\U0001F4CC", "bounce", "Anything rattling around? Park it here."),
+    ("\U0001F500", "tilt", "Pulled onto something else? Pick when to come back."),
+    ("\U0001F375", "sway", "Tea, water, or a stretch? Pick one."),
+    ("\U0001FA9F", "float", "Look out a window for a moment?"),
+    ("\u23F1\uFE0F", "nod", "What could you finish in 10 minutes?"),
+    ("\U0001F40C", "sway", "Going slow? Still counts."),
+    ("\U0001F938", "jelly", "Stand up for a second? It helps."),
+    ("\U0001F9FA", "jelly", "Too much in your head? Dump it in the lot."),
+    ("\U0001F501", "spin", "Same tab again? What were you looking for?"),
+    ("\U0001F319", "float", "Long day? Pick the easiest useful thing."),
+    ("\U0001F331", "pulse", "Small progress is progress. What's next?"),
+    ("\U0001F3A7", "nod", "Is this music helping, or just noise?"),
+    ("\U0001F9CA", "jelly", "Overheating? A short walk cools it down."),
+    ("\U0001F4E5", "nod", "Inbox again? Close it for one round?"),
+    ("\U0001F9F8", "sway", "What's one easy win right now?"),
+    ("\U0001F31E", "pulse", "Daylight check. Seen the sky today?"),
 ]
 FIRST_CHECKINS = [
     ("\U0001F44B", "wiggle", "Quick check: is this what you meant to be doing?"),
     ("\U0001F3AF", "tilt", "Want to focus for a few minutes, or keep doing this?"),
-    ("\U0001F552", "float", "You've been at the computer a while. How would you like to use the next bit?"),
-    ("\U0001F4AD", "bounce", "A thought pulling you away? Park it here and return when you're ready."),
+    ("\U0001F552", "float", "You've been on a while. What's next?"),
+    ("\U0001F4AD", "bounce", "A thought pulling you away? Park it, come back when ready."),
 ]
-BOOST_FACES = ["\U0001F680", "\U0001F50D", "\U0001F331", "\U0001F3AF", "\U0001F9EA", "\u270F\uFE0F", "\U0001F4AA", "\u26A1"]
+# the face and move for a round's boost line
+BOOST_FACES = [("\U0001F680", "bounce"), ("\U0001F50D", "tilt"), ("\U0001F331", "sway"), ("\U0001F3AF", "nod"),
+               ("\U0001F9EA", "wiggle"), ("\u270F\uFE0F", "wiggle"), ("\U0001F4AA", "pulse"), ("\u26A1", "jelly"),
+               ("\U0001F3C4", "sway"), ("\U0001F3A7", "nod"), ("\U0001F9E9", "spin"), ("\U0001F525", "pulse")]
 
 
 def idle_seconds():
@@ -3325,8 +3433,10 @@ def windows_says_quiet():
 
 class EmojiFace(QWidget):
     """A big emoji that moves a little, so the circle feels alive: shake (a nervous, tilted, vibrating head),
-    bounce, wiggle, float, tilt. It pops in, plays for a few seconds, then rests (shake and float keep going
-    gently while it's on screen)."""
+    bounce, wiggle, float, tilt, jelly (squash and stretch), nod, sway, spin (one turn) and pulse (a heartbeat).
+    It pops in, plays for a few seconds, then rests (shake, float and sway keep going gently while it's on
+    screen)."""
+    ALWAYS = ("shake", "float", "sway")
 
     def __init__(self, px=30):
         super().__init__()
@@ -3352,7 +3462,7 @@ class EmojiFace(QWidget):
 
     def _step(self):
         t = time.monotonic() - self._t0
-        if not self.isVisible() or (t > 3.0 and self.anim not in ("shake", "float")):
+        if not self.isVisible() or (t > 3.0 and self.anim not in self.ALWAYS):
             self.tick.stop()
         self.update()
 
@@ -3369,6 +3479,7 @@ class EmojiFace(QWidget):
         p.setRenderHint(QPainter.TextAntialiasing)
         pop = 1.0 if t > 0.35 else 0.45 + 0.55 * math.sin(t / 0.35 * math.pi / 2) * 1.08   # pop in
         dx = dy = rot = 0.0
+        sx = sy = 1.0
         decay = max(0.0, 1.0 - t / 3.0)
         if self.anim == "shake":            # nervous: head tilted, vibrating in short bursts
             burst = 1.0 if (t % 2.2) < 0.9 else 0.15
@@ -3383,12 +3494,29 @@ class EmojiFace(QWidget):
             rot = 3 * math.sin(t * 1.7)
         elif self.anim == "tilt":           # curious head tilt, then a small nod
             rot = -16 * min(1.0, t * 3) + 4 * math.sin(t * 5) * decay
+        elif self.anim == "jelly":          # squash and stretch, settling
+            k = 0.16 * math.sin(t * 11) * decay
+            sx, sy = 1 + k, 1 - k
+            dy = k * self.px / 2
+        elif self.anim == "nod":            # yes, yes: dips down and back
+            dy = 4 * max(0.0, math.sin(t * 8)) * decay
+            sy = 1 - 0.05 * max(0.0, math.sin(t * 8)) * decay
+        elif self.anim == "sway":           # slow side to side, like a plant
+            rot = 9 * math.sin(t * 2.4)
+            dx = 1.5 * math.sin(t * 2.4)
+        elif self.anim == "spin":           # one smooth turn, then still
+            u = min(1.0, max(0.0, (t - 0.25) / 0.8))
+            rot = 360 * u * u * (3 - 2 * u)
+        elif self.anim == "pulse":          # a double heartbeat
+            beat = t % 1.1
+            sx = sy = 1 + (0.13 * math.exp(-((beat - 0.12) ** 2) / 0.002) +
+                           0.08 * math.exp(-((beat - 0.34) ** 2) / 0.002)) * decay
         c = self.width() / 2
         p.translate(c + dx, c + dy)
         p.rotate(rot)
-        p.scale(pop, pop)
+        p.scale(pop * sx, pop * sy)
         f = QFont()
-        f.setFamilies(["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol"])
+        f.setFamilies(EMOJI_FONTS)
         f.setPixelSize(self.px)
         p.setFont(f)
         p.setPen(QColor(C["text"]))    # colour emoji ignore this; a black-and-white fallback would be invisible in black
@@ -3410,6 +3538,8 @@ class SpeechBubble(QWidget):
             QPushButton#chip:hover {{ background: {C['accent']}; border-color: {C['accent']}; }}
             QPushButton#chip:focus {{ border-color: {C['text']}; }}""")
         self.tail_right = True
+        self.focus_return = FocusReturn()  # the app you were typing in, back when the questions end
+        self._keys_at = 0.0                # when a bubble that had the keyboard closed (a follow-up keeps it)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 22, 10)
         lay.setSpacing(8)
@@ -3477,18 +3607,30 @@ class SpeechBubble(QWidget):
         p.drawPath(path)
 
     def say(self, circle_rect, text, buttons=(), timeout_ms=7000, emoji=None, anim="bounce",
-            minute_input=None):
+            minute_input=None, text_input=None):
         """buttons: [(label, response_key)]; clicking closes the bubble and emits closed(response_key).
-        emoji: an optional animated face beside the text. minute_input: (response prefix, maximum minutes[, button])."""
+        emoji: an optional animated face beside the text. minute_input: (response prefix, maximum minutes[, button]).
+        text_input: (response prefix, placeholder, button): the same row takes any text, above the chips."""
         self.timer.stop()
         self.face.set(emoji, anim)
-        self._minute_prefix = minute_input[0] if minute_input else None
+        self._minute_prefix = (text_input or minute_input or (None,))[0]
+        self._text_mode = bool(text_input)
         self.minute_edit.clear()
-        if minute_input:
+        self.minute_edit.setValidator(None if text_input else self.minute_validator)
+        self.minute_edit.setMaxLength(80)
+        lay = self.layout()
+        lay.removeWidget(self.minute_row)
+        lay.insertWidget(1 if text_input else 2, self.minute_row)
+        if text_input:
+            self.minute_edit.setPlaceholderText(text_input[1])
+            self.minute_edit.setAccessibleName(text_input[1])
+            self.minute_start.setText(text_input[2])
+        elif minute_input:
             self.minute_validator.setTop(minute_input[1])
+            self.minute_edit.setPlaceholderText("Custom minutes")
             self.minute_edit.setAccessibleName(f"Custom {minute_input[0]} minutes")
             self.minute_start.setText(minute_input[2] if len(minute_input) > 2 else "Start")
-        self.minute_row.setVisible(bool(minute_input))
+        self.minute_row.setVisible(bool(minute_input or text_input))
         for b in self._btns:
             b.setParent(None)
             b.deleteLater()
@@ -3544,6 +3686,8 @@ class SpeechBubble(QWidget):
         self.anim.setDuration(260)
         self.anim.start()
         self.timer.start(timeout_ms)
+        if (buttons or minute_input or text_input) and time.monotonic() - self._keys_at < 1.5:
+            self.take_keys(field=True, keep_timer=True)  # a follow-up to a question you just answered
 
     def keyPressEvent(self, e):
         n = e.key() - Qt.Key_1
@@ -3554,24 +3698,46 @@ class SpeechBubble(QWidget):
         else:
             super().keyPressEvent(e)
 
-    def take_keys(self):
-        """The list hotkey lands here while a question shows: number keys pick, Esc closes."""
-        self.timer.stop()
+    def take_keys(self, field=False, keep_timer=False):
+        """Takes the keyboard so number keys pick, Esc closes and typed minutes land here (the list hotkey, a
+        question you asked for, a follow-up). field: start in the typing box when there is one."""
+        if not keep_timer:
+            self.timer.stop()
+        if not self.focus_return.hwnd:
+            self.focus_return.remember()
         force_foreground(self)
-        (self._btns[0] if self._btns else self.minute_edit).setFocus()
+        typing = field and not self.minute_row.isHidden()
+        (self.minute_edit if typing or not self._btns else self._btns[0]).setFocus()
+
+    def _typed(self):
+        """The typed answer if it can be sent, else ""."""
+        t = self.minute_edit.text()
+        if getattr(self, "_text_mode", False):
+            return " ".join(t.split())
+        return t if self.minute_edit.hasAcceptableInput() else ""
 
     def _minute_text_changed(self):
-        self.minute_start.setEnabled(self.minute_edit.hasAcceptableInput())
+        if self.minute_edit.text():
+            self.timer.stop()             # typing: don't fade away mid-sentence
+        self.minute_start.setEnabled(bool(self._typed()))
 
     def _submit_minutes(self):
-        if self._minute_prefix and self.minute_edit.hasAcceptableInput():
-            self._finish(f"{self._minute_prefix}_{self.minute_edit.text()}")
+        if self._minute_prefix and self._typed():
+            self._finish(f"{self._minute_prefix}_{self._typed()}")
 
     def _finish(self, key):
         self.timer.stop()
         if self.isVisible():
+            self._keys_at = time.monotonic() if self.isActiveWindow() else 0.0
             self.hide()
             self.closed.emit(key)
+            if self._keys_at:
+                QTimer.singleShot(400, self._return_keys)
+
+    def _return_keys(self):
+        """No follow-up took the keyboard: give it back to the app you were in."""
+        if not (self.isVisible() and self.isActiveWindow()):
+            self.focus_return.give_back()
 
 
 # ---------------------------------------------------------------- background noise
@@ -3804,48 +3970,68 @@ class MediaWatch(QObject):
         self.proc = None
 
 
-PEEKS = {"water": (["\U0001F4A7", "\U0001F964", "\U0001F9CA", "\U0001F6B0", "\U0001F375", "\U0001F433", "\U0001F335"],
+PEEKS = {"water": (["\U0001F4A7", "\U0001F964", "\U0001F9CA", "\U0001F6B0", "\U0001F375", "\U0001F433", "\U0001F335",
+                    "\U0001F95B", "\U0001F349", "\U0001F42C"],
                    ["Sip of water?", "Water break?", "Hydrate?", "Drink some water", "Thirsty brain?",
                     "One sip. Go.", "Bottle check", "Water, then back", "Brain wants water", "Tiny sip?",
-                    "Refill time?", "Stay watered, plant"]),
-         "eyes": (["\U0001F440", "\U0001F989", "\U0001F52D", "\U0001F333", "\U0001FA9F", "\U0001F60C", "\U0001F426"],
+                    "Refill time?", "Stay watered, plant", "Glass half empty?", "Sip, then go", "Water o'clock",
+                    "Cheers, with water"]),
+         "eyes": (["\U0001F440", "\U0001F989", "\U0001F52D", "\U0001F333", "\U0001FA9F", "\U0001F60C", "\U0001F426",
+                   "\U0001F304", "\U0001F992", "\u2601\uFE0F"],
                   ["Look far away, 20 s", "Rest your eyes", "Eyes off screen", "Look out the window",
                    "Blink a few times", "Find something far", "20 s of distance", "Unfocus for a bit",
-                   "Eyes: tiny break", "Look at a tree?", "Soft gaze, 20 s", "Screen can wait 20 s"])}
+                   "Tiny eye break", "Look at a tree?", "Soft gaze, 20 s", "Screen can wait 20 s",
+                   "Look past the screen", "Find the farthest thing", "Eyes to the horizon", "Blink, then look far"])}
+
+
+# kind, setting, every (min), head start (min): water at 30, 70, 110 and eyes at 20, 40, 60, so they never
+# land on the same tick. Water first: it is the rarer one.
+PEEK_EVERY = (("water", "peek_water", 40, 10), ("eyes", "peek_eyes", 20, 0))
+
+
+def peek_mode(settings):
+    """How peeks count time: "always" (laptop use, the default) or "focus" (focus rounds only)."""
+    return "focus" if settings.get("peek_when") == "focus" else "always"
 
 
 def focus_peek_step(clock, state, remaining, settings, can_show, now=None, idle=0.0):
-    """Count focus across rounds (or, with peek_when "always", any active screen time outside breaks);
-    leave quiet-time cues pending until they can be shown."""
+    """Count laptop use (keyboard or mouse in the last 2 min; focus rounds always count) or, in "focus" mode,
+    focus rounds only. 5 min away resets the eye count, water keeps counting. A cue never shows in a round's
+    first 3 min or last minute; one held from the last minute shows in the break. Quiet-time cues wait."""
     now = time.time() if now is None else now
-    focusing = bool(state) and state.get("kind") == "focus" and state.get("paused_left") is None
-    always = settings.get("peek_when", "focus") == "always"
+    kind_now = state.get("kind") if state and state.get("paused_left") is None else None
+    focusing, on_break = kind_now == "focus", kind_now == "break"
+    always = peek_mode(settings) == "always"
     last, clock["tick_at"] = float(clock.get("tick_at", now)), now
-    if not focusing and not always:
-        return None
+    step = max(0.0, now - last)
+    seconds = max(0.0, float(clock.get("seconds", 0)))
+    shown = clock.get("shown")
+    if not isinstance(shown, dict):
+        shown = clock["shown"] = {}
+    if step >= 300 or (idle >= 300 and not focusing):      # away (or asleep) 5 min: the eyes rested
+        clock["eyes_from"], shown["eyes"] = seconds, 0
     gain = 0.0
     if focusing:
         session = state.get("started")
         if clock.get("session") != session:
             clock["session"], clock["session_elapsed"] = session, 0.0
         elapsed = max(0.0, float(state["minutes"]) * 60 - max(0.0, remaining))
-        previous = max(0.0, float(clock.get("session_elapsed", 0)))
-        gain = max(0.0, elapsed - previous)
+        gain = max(0.0, elapsed - max(0.0, float(clock.get("session_elapsed", 0))))
         clock["session_elapsed"] = elapsed
-    if always:                          # time at the keyboard; away (60 s idle) and breaks don't count
-        on_break = bool(state) and state.get("kind") == "break"
-        gain = 0.0 if on_break or idle >= 60 else max(0.0, min(60.0, now - last))
-    clock["seconds"] = max(0.0, float(clock.get("seconds", 0))) + gain
-    shown = clock.setdefault("shown", {})
-    if not isinstance(shown, dict):
-        shown = clock["shown"] = {}
-    for kind, key, every in (("eyes", "peek_eyes", 20), ("water", "peek_water", 40)):
-        due = int(clock["seconds"] // (every * 60))
-        already = max(0, int(shown.get(kind, 0)))
+    if always:
+        gain = min(60.0, step) if focusing or idle < 120 else 0.0
+    elif not (focusing or on_break):                        # focus mode: held cues may still show in a break
+        return None
+    clock["seconds"] = seconds = seconds + gain
+    if focusing and (float(clock["session_elapsed"]) < 180 or remaining <= 60):
+        return None
+    for kind, key, every, head in PEEK_EVERY:
+        base = seconds - (float(clock.get("eyes_from", 0)) if kind == "eyes" else 0.0)
+        due = int((max(0.0, base) + head * 60) // (every * 60))
         if not settings.get(key, True):
             shown[kind] = due
             continue
-        if (due > already and (remaining > 60 or not focusing) and
+        if (due > max(0, int(shown.get(kind, 0))) and
                 now - float(clock.get("last_shown_at", 0)) >= 90 and can_show()):
             shown[kind] = due
             clock["last_shown_at"] = now
@@ -3916,7 +4102,7 @@ class PeekBuddy(QWidget):
         self._home = QPoint(g.center().x() - self.width() // 2, g.center().y() - self.height() // 2)
         self._out = self._home + QPoint(self._dir * round((g.width() // 2 + 6) * self.scale), -g.height() // 4)
         guide = kind == "eyes" and self.settings.get("eye_guide", False)
-        self.face.set(emoji, "bounce" if self.scale >= 1.3 else random.choice(["wiggle", "bounce", "tilt"]))
+        self.face.set(emoji, "bounce" if self.scale >= 1.3 else pick_fresh(LIVELY_ANIMS, "peek_anim"))
         self.count.stop()
         self.tip.hide()
         self.anim.stop()
@@ -3971,7 +4157,20 @@ class PeekBuddy(QWidget):
 
 # back from being away mid-focus ({m} = minutes). The circle only knows the keyboard and mouse went quiet.
 AWAY_LINES = [
-    ("\u23F8\uFE0F", "No keyboard or mouse for {m} min during this round. Keep that time in it?"),
+    ("\u23F8\uFE0F", "Away {m} min. Keep it in this round?"),
+    ("\U0001F44B", "Back! No typing for {m} min. Still count it?"),
+    ("\U0001F914", "{m} quiet minutes. Thinking counts. Keep them?"),
+    ("\u2615", "Welcome back. {m} min away. Keep that time?"),
+    ("\u2328\uFE0F", "No keys for {m} min. Keep them in the round?"),
+]
+# input came back after a long break ({m} = minutes since it ended)
+WELCOME_BACK_LINES = [
+    ("\U0001F44B", "Welcome back. The break ended {m} min ago. What next?"),
+    ("\U0001F324\uFE0F", "Hey, you're back. Break ended {m} min ago. Next?"),
+    ("\U0001F6AA", "Back through the door. {m} min past the break. What now?"),
+    ("\U0001F9ED", "{m} min since the break ended. Where to next?"),
+    ("\u2615", "Welcome back. {m} min of bonus break. Ready?"),
+    ("\U0001F43E", "Look who's back. {m} min past the break. What next?"),
 ]
 # the moment a break ends: short, a little cheeky, never guilt
 BREAK_END_LINES = [
@@ -3985,31 +4184,36 @@ BREAK_END_LINES = [
     ("\U0001F6CB\uFE0F", "The couch says stay. The circle says go."),
     ("\U0001F3C1", "Pit stop over. Back on track?"),
     ("\U0001F31F", "Fresh eyes, fresh start. Ready?"),
-    ("\U0001F44B", "Welcome back. Or at least, you should be."),
+    ("\U0001F44B", "Welcome back. Ready when you are."),
     ("\U0001F4AA", "Break: done. You: ready. Probably."),
     ("\U0001F375", "Last sip. Then back to it."),
     ("\U0001F3AF", "Break's over. One small thing first?"),
+    ("\U0001F331", "Break's over. Easy start?"),
+    ("\U0001F463", "Back to it. Small step first."),
+    ("\U0001F938", "One more stretch, then go."),
 ]
 # a break that got extended is over ({parts} = "5 + 5", {total} = 10)
 EXTENDED_BREAK_LINES = [
     ("\U0001F9EE", "{parts} min of break. That's {total}. Now what?"),
     ("\U0001F6CB\uFE0F", "Break, then bonus break: {parts} = {total} min. The couch is winning. Your move."),
     ("\U0001F440", "{parts}. I did the math: {total} min. Round two of work?"),
-    ("\U0001F570\uFE0F", "{parts} = {total} min across {n} breaks. Impressive stamina. Back to it?"),
+    ("\U0001F570\uFE0F", "{parts} = {total} min across {n} breaks. Back to it?"),
     ("\U0001F36A", "\"Just a few more\" became {parts} = {total} min. Happens. One small step now?"),
     ("\U0001F422", "{parts} = {total} min. Slow and steady, but mostly steady. Ready?"),
     ("\U0001F3AC", "Break, then the sequel: {parts} = {total} min. Now the main feature?"),
-    ("\U0001F9D8", "{parts} = {total} min recharged. You should be at 110%. Prove it?"),
+    ("\U0001F9D8", "{parts} = {total} min recharged. Ready for a round?"),
     ("\U0001F4E3", "Encore over. {parts} = {total} min. Take a bow, then back to work?"),
     ("\U0001F9ED", "{parts} = {total} min off the map. Want back on it?"),
     ("\U0001F95C", "{parts} = {total} min. Snack break has become a lifestyle. Tiny round?"),
     ("\U0001F44B", "Still counting: {parts} = {total} min. What's next?"),
+    ("\U0001F50B", "{parts} = {total} min of charging. Battery full?"),
+    ("\U0001F324\uFE0F", "{parts} = {total} min off. Ready for an easy round?"),
 ]
 # the break is over and you're not back yet ({m} = minutes since it ended)
 OVERRUN_LINES = [
     ("\u23F0", "Break ended {m} min ago. Your work is starting to wonder where you went."),
     ("\U0001F440", "Psst. The break's been over for {m} min. One tiny round?"),
-    ("\U0001F6CB\uFE0F", "That break is now {m} min into overtime. The couch is very persuasive, I know."),
+    ("\U0001F6CB\uFE0F", "Break's {m} min into overtime. The couch is persuasive, I know."),
     ("\U0001F4E3", "Friendly reminder: break's over, {m} min ago. Ready when you are."),
     ("\U0001F422", "{m} min past the break. Slow start is still a start. Want 10 minutes?"),
     ("\U0001F9ED", "The plan said back {m} min ago. Want to rejoin it?"),
@@ -4019,6 +4223,8 @@ OVERRUN_LINES = [
     ("\U0001F44B", "Still there? Break's been done for {m} min. I'll keep your seat warm."),
     ("\U0001F9E0", "Your brain's rested for {m} bonus minutes. Put it to work?"),
     ("\U0001F36A", "{m} min of extra break. Treat's over. Back to it?"),
+    ("\U0001FA91", "Your chair misses you. Break ended {m} min ago."),
+    ("\u2615", "{m} min past the break. Finish the sip, then one small step?"),
 ]
 
 
@@ -4146,19 +4352,10 @@ class NudgeManager(QObject):
         self._asked = None if preview else ("A calendar event is coming up. Want a focus round?"
                                             if calendar_event else msg)
         self.bubble.hop()
-        self._checkin_view = (msg, face, anim)
         self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=
                          [("Start focus", "focus"), ("Take a break", "break"), ("Forgot the timer", "working"),
-                          ("More", "checkin_more")], timeout_ms=30000)
-
-    def more_choices(self, asked):
-        """The rarer check-in answers, one tap away so the first view stays short."""
-        msg, face, anim = getattr(self, "_checkin_view", ("What's happening?", None, "bounce"))
-        self._asked = asked
-        self.bubble.hop()
-        self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=
-                         [("Urgent task came up", "urgent_detour"), ("Another task for now", "other_task"),
-                          ("I'm on track", "fine"), ("Ask me later", "snooze")], timeout_ms=30000)
+                          ("Other task came up", "other_task"), ("I'm on track", "fine"), ("Ask me later", "snooze")],
+                         timeout_ms=30000)
 
     def _checkin_work(self, preview=False):
         """Name the nearest open work sometimes, without turning every check-in into the same reminder."""
@@ -4201,10 +4398,8 @@ class NudgeManager(QObject):
                 pass
         return nearest
 
-    def ask_other_task(self, urgent=False):
-        line = ("Something urgent needs your attention. When should I check if you're ready to return "
-                "to what you planned?" if urgent else "Got it. When should I check if you're ready to return?")
-        self._say_followup(line,
+    def ask_other_task(self):
+        self._say_followup("Got it. When should I check if you're ready to get back to what you planned?",
                            [("10 min", "other_10"), ("20 min", "other_20"), ("30 min", "other_30"),
                             ("No extra check", "other_0")], "__other_task__", emoji="\U0001F9ED",
                            timeout_ms=30000)
@@ -4228,9 +4423,10 @@ class NudgeManager(QObject):
         """Input resumed after a long break; offer a way forward without asking for an activity log."""
         if self.quiet_reason() or self.speech.isVisible():
             return
-        self._say_followup(f"Welcome back. The break ended {fmt_min(round(minutes))} min ago. What next?",
+        face, line = pick_fresh(WELCOME_BACK_LINES, "welcome_back")
+        self._say_followup(line.format(m=fmt_min(round(minutes))),
                            [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji="\U0001F44B", timeout_ms=45000)
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
 
     def ask_worked_minutes(self):
         """'I was working, forgot the timer': screen time can include scrolling, so ask how long it was work."""
@@ -4248,6 +4444,7 @@ class NudgeManager(QObject):
                            [(f"{m} min", f"forgot_{m}") for m in (10, 20, 30)] + [("Cancel", "forgot_cancel")],
                            "__forgot__", emoji="\u23F1\uFE0F", timeout_ms=30000,
                            minute_input=("forgot", 600, "Log"))
+        self.speech.take_keys(field=True, keep_timer=True)
 
     def log_forgotten_focus(self, minutes, on=""):
         """Forgot the timer: the last `minutes` go in as a focus session, with what it was for if given.
@@ -4270,11 +4467,12 @@ class NudgeManager(QObject):
         line = f"Logged {minutes} min of focus" + (f" for {short_text(on, 30)}." if on else ".")
         QTimer.singleShot(0, lambda: self._say_followup(line, [], None, timeout_ms=3500))
 
-    def _say_followup(self, text, buttons, tag, emoji="\U0001F44D", timeout_ms=20000, minute_input=None):
+    def _say_followup(self, text, buttons, tag, emoji="\U0001F44D", timeout_ms=20000, minute_input=None,
+                      text_input=None, anim="bounce"):
         self._asked = tag
         self.bubble.hop()
-        self.speech.say(self.bubble.geometry(), text, buttons, emoji=emoji, anim="bounce", timeout_ms=timeout_ms,
-                        minute_input=minute_input)
+        self.speech.say(self.bubble.geometry(), text, buttons, emoji=emoji, anim=anim, timeout_ms=timeout_ms,
+                        minute_input=minute_input, text_input=text_input)
 
     def away_back(self, minutes, same_session, start_iso):
         """Back after being away mid-focus: offer to take that time out of the session."""
@@ -4283,7 +4481,8 @@ class NudgeManager(QObject):
         self._away = (minutes, same_session, start_iso)
         face, line = pick_fresh(AWAY_LINES, "away")
         self._say_followup(line.format(m=fmt_min(round(minutes))),
-                           [("Keep it", "keep"), ("Take it out", "trim")], "__away__", emoji=face)
+                           [("Keep it", "keep"), ("Take it out", "trim")], "__away__", emoji=face,
+                           anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
 
     break_parts = None       # minutes of each break in a row ([5, 5] after "a few more min")
 
@@ -4303,7 +4502,7 @@ class NudgeManager(QObject):
         else:
             face, line = pick_fresh(BREAK_END_LINES, "break_end")
         self._say_followup(line, [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji=face, timeout_ms=45000)
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
         return line
 
     def ask_more_break(self):
@@ -4319,16 +4518,7 @@ class NudgeManager(QObject):
         face, line = pick_fresh(OVERRUN_LINES, "overrun")
         self._say_followup(line.format(m=int(round(minutes))),
                            [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji=face, timeout_ms=45000)
-
-    def ask_style(self):
-        """First run: one question so the start-of-focus lines fit (nudges to start, or keep-you-in-flow)."""
-        self.store.settings["procrastinator_asked"] = True
-        self.store.save()
-        self._say_followup("Hi! One question so start lines fit you. When a focus round starts, what helps more?",
-                           [("A push to start", "style_yes"), ("Some of each", "style_sometimes"),
-                            ("Staying in flow", "style_no")],
-                           "__style__", emoji="\U0001F44B", timeout_ms=60000)
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
 
     BREAK_TAGS = ["Meal", "Call", "Rest", "Walk"]
 
@@ -4352,16 +4542,17 @@ class NudgeManager(QObject):
                 picks.append(t)
         return picks[:4]
 
-    def ask_tag(self, kind=None, lead="", answer="__tag__", q=None):
-        """Ask what the running round (or a forgotten one: answer="__forgot_tag__") is for. Answering is optional;
-        it times out quietly."""
+    def ask_tag(self, kind=None, lead="", answer="__tag__", q=None, button="Save"):
+        """Ask what the running round (or a forgotten one: answer="__forgot_tag__") is for: past tags as chips, a
+        type box, Skip. Answering is optional; it times out quietly (typing stops the timeout)."""
         kind = kind or self.timer.kind
         self._tag_picks = self.tag_choices(kind)
-        q = q or ("Break for?" if kind == "break" else "What's this round for?")
+        q = q or ("What's this break for?" if kind == "break" else "What are you working on?")
         self._say_followup((lead + " " if lead else "") + q,
                            [(short_text(t, 22), f"tag_{i}") for i, t in enumerate(self._tag_picks)]
-                           + [("Other...", "tag_other"), ("Skip", "tag_skip")],
-                           answer, emoji="☕" if kind == "break" else "\U0001F3AF", timeout_ms=20000)
+                           + [("Skip", "tag_skip")],
+                           answer, emoji="☕" if kind == "break" else "\U0001F3AF", timeout_ms=20000,
+                           text_input=("tagtext", "Type it here (optional)", button))
 
     def ask_tag_text(self):
         kind = self.timer.kind
@@ -4375,24 +4566,17 @@ class NudgeManager(QObject):
             return
         self._asked = None
         self.bubble.hop()
-        self.speech.say(self.bubble.geometry(), boost_line(self._st("procrastinator", "sometimes")), (),
-                        timeout_ms=4500, emoji=random.choice(BOOST_FACES), anim="bounce")
+        face, anim = pick_fresh(BOOST_FACES, "boost_face")
+        self.speech.say(self.bubble.geometry(), boost_line(), (),
+                        timeout_ms=4500, emoji=face, anim=anim)
 
     def _answered(self, key):
         msg, self._asked = self._asked, None
-        if key == "checkin_more":
-            QTimer.singleShot(0, lambda m=msg: self.more_choices(m))
-            return
         if msg is None:
             return
-        if msg == "__style__":
-            if key.startswith("style_"):
-                self.store.settings["procrastinator"] = key[len("style_"):]
-                self.store.save()
-            return
         if msg == "__tag__":
-            if key == "tag_other":
-                QTimer.singleShot(0, self.ask_tag_text)
+            if key.startswith("tagtext_"):
+                self.timer.set_on(key[len("tagtext_"):])
             elif key.startswith("tag_") and key[4:].isdigit():
                 picks = getattr(self, "_tag_picks", [])
                 if int(key[4:]) < len(picks):
@@ -4403,15 +4587,14 @@ class NudgeManager(QObject):
             if mins:
                 self._forgot_min = mins
                 QTimer.singleShot(0, lambda: self.ask_tag("focus", f"{mins} min.", "__forgot_tag__",
-                                                          "What was it for?"))
+                                                          "What did you work on?", "Log"))
             return
         if msg == "__forgot_tag__":
             mins, self._forgot_min = getattr(self, "_forgot_min", 0), 0
             if not mins:
                 return
-            if key == "tag_other":
-                QTimer.singleShot(0, lambda: self._log_forgot(mins, ask(None, "What was it for?", "",
-                                                                        chips=self.tag_choices("focus"))))
+            if key.startswith("tagtext_"):
+                self._log_forgot(mins, key[len("tagtext_"):])
                 return
             picks = getattr(self, "_tag_picks", [])
             i = int(key[4:]) if key.startswith("tag_") and key[4:].isdigit() else -1
@@ -4492,8 +4675,6 @@ class NudgeManager(QObject):
             QTimer.singleShot(0, self.ask_break_minutes)
         elif key == "other_task":
             QTimer.singleShot(0, self.ask_other_task)
-        elif key == "urgent_detour":
-            QTimer.singleShot(0, lambda: self.ask_other_task(urgent=True))
         elif key == "snooze":
             self.active_s = -30 * 60   # ask again 30 min later than usual
 
@@ -4617,7 +4798,7 @@ def session_quip(minutes, parked, urges, dists, glimmers=0):
                       (E["cat"], "tilt", f"{glimmers} lift{ls} logged. Your brain is learning to look for them."),
                       (E["zen"], "float", "Focused and still caught a good moment. Best of both.")])
     if parked >= 5:
-        pools.append([(E["ticket"], "bounce", f"Your brain opened {parked} tickets. Support team (you) will get to them at the break."),
+        pools.append([(E["ticket"], "bounce", f"{parked} tickets opened. Support (you) gets to them at the break."),
                       (E["park"], "float", f"{parked} thoughts parked. The lot is busier than your head now. Good trade."),
                       (E["files"], "bounce", f"{parked} thoughts out of your head and into the lot. Lighter already."),
                       (E["brain"], "bounce", f"Busy brain today: {parked} parked. And you still finished."),
@@ -4628,7 +4809,7 @@ def session_quip(minutes, parked, urges, dists, glimmers=0):
                   (E["trophy"], "bounce", "The round is finished. Take a moment before the next one."),
                   (E["melt"], "float", "One round done. Let your shoulders drop."),
                   (E["cat"], "tilt", f"{m} minutes complete. Stretch if you need one."),
-                  (E["muscle"], "bounce", "A finished round is something you can build on."),
+                  (E["muscle"], "bounce", "One finished round. Build on it."),
                   (E["spark"], "float", f"{m} minutes complete. A break is a good next step."),
                   (E["salute"], "bounce", f"Round done. {m} minutes on the clock."),
                   (E["zen"], "float", "Done for now. Look away from the screen for a moment."),
@@ -4695,14 +4876,18 @@ class SessionCard(QWidget):
                 padding: 6px 12px; border-radius: 8px; font-weight: 600; }}
             QPushButton#primary:hover {{ background: #b54552; }}
             QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}
-            QPushButton#appChip {{ background: transparent; padding: 5px 8px; border-radius: 8px; }}
-            QPushButton#appChip:checked {{ background: {C['dist_bg']}; color: {C['dist']}; border-color: {C['dist']}; }}
+            QLabel#markQ {{ color: {C['dim']}; font-size: 12px; }}
+            QPushButton#appChip {{ background: transparent; padding: 7px 10px; border-radius: 8px; }}
+            QPushButton#appChip:checked {{ background: {C['dist']}; color: {C['surface']}; border-color: {C['dist']};
+                font-weight: 700; }}
+            QLabel#netLine {{ background: {C['accent_soft']}; color: {C['accent_text']}; border-radius: 8px;
+                padding: 8px 10px; font-size: 13px; font-weight: 700; }}
             QLineEdit#nextFocusMinutes {{ background: {C['surface_hi']}; color: {C['text']};
                 border: 1px solid {C['border']}; border-radius: 7px; padding: 6px 8px; }}""")
-        self.W = 330
+        self.W = 352
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(10)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(14)
         top = QHBoxLayout()
         self.head = QLabel("Focus complete")
         self.head.setObjectName("head")
@@ -4723,7 +4908,7 @@ class SessionCard(QWidget):
         lay.addLayout(qrow)
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(0)
+        grid.setVerticalSpacing(2)
         self.nums, self.lbls = [], []
         for i in range(4):
             n = QLabel()
@@ -4750,12 +4935,13 @@ class SessionCard(QWidget):
         self.mark_row = QWidget(self)            # press the apps that distracted you this round
         mark_lay = QVBoxLayout(self.mark_row)
         mark_lay.setContentsMargins(0, 0, 0, 0)
-        mark_lay.setSpacing(6)
-        self.mark_q = QLabel("Choose the distracting apps from this session:", self.mark_row)
+        mark_lay.setSpacing(8)
+        self.mark_q = QLabel("Which apps distracted you?", self.mark_row)
+        self.mark_q.setObjectName("markQ")
         self.mark_q.setWordWrap(True)
         mark_lay.addWidget(self.mark_q)
         self.app_grid = QGridLayout()
-        self.app_grid.setSpacing(5)
+        self.app_grid.setSpacing(6)
         mark_lay.addLayout(self.app_grid)
         self.app_buttons = {}
         lay.addWidget(self.mark_row)
@@ -4771,6 +4957,10 @@ class SessionCard(QWidget):
         self.b_take.setToolTip("Take the minutes in distracting apps out of this round's focus time")
         self.b_take.clicked.connect(self._take_out)
         mark_lay.addWidget(self.b_take, 0, Qt.AlignLeft)   # under the chips: three buttons don't fit one row
+        self.net_line = QLabel(self.mark_row)              # what Take out did, shown as a result, not a button
+        self.net_line.setObjectName("netLine")
+        self.net_line.setWordWrap(True)
+        mark_lay.addWidget(self.net_line)
         btns.addWidget(self.b_break)
         btns.addWidget(self.b_again)
         btns.addStretch(1)
@@ -4823,7 +5013,7 @@ class SessionCard(QWidget):
         self.auto.setSingleShot(True)
         self.auto.timeout.connect(lambda: None if self.underMouse() else self.close_card())
         self.on_break = self.on_again = self.on_mark = self.on_take_out = None
-        self.app_rows, self.marks, self._taken, self.focus_min = [], {}, False, 0
+        self.app_rows, self.marks, self._taken, self.focus_min = [], {}, 0, 0
         self.choice_kind = "focus"
         self.auto_break = False
         self.b_break.clicked.connect(self._ask_break)
@@ -4847,7 +5037,7 @@ class SessionCard(QWidget):
         head = "Focus complete \u00B7 break started" if auto_break else "Focus complete"
         self.head.setText(head + (f" \u00B7 {short_text(on, 28)}" if on else ""))
         self.app_rows, self.marks, self.focus_min = list(apps or []), dict(marks or {}), minutes
-        self._taken = False
+        self._taken = 0                          # minutes taken out on this card, 0 = not yet
         self._build_app_buttons()
         self._show_apps()
         data = [(fmt_min(minutes), "min focused"), (str(parked), "thoughts parked"),
@@ -4921,11 +5111,18 @@ class SessionCard(QWidget):
         bits = [f"{a} {fmt_min(round(m))} min" + (" (distracting)" if self.marks.get(a) == "distracting" else "")
                 for a, m in totals[:4] if m >= 0.5]
         self.apps_line.setText("Apps: " + " · ".join(bits) if bits else "")
-        self.apps_line.setVisible(bool(bits))
+        self.apps_line.setVisible(bool(bits) and not self.app_buttons)   # the buttons show the minutes already
         self.mark_row.setVisible(bool(self.app_buttons))
         n = self.distracting_min()
         self.b_take.setText(f"Take out {n} min")
-        self.b_take.setVisible(n >= 1 and not self._taken)
+        self.b_take.setEnabled(not self._taken)
+        self.b_take.setVisible(not self._taken and n >= 1)
+        # done once: say what it did, don't offer it twice
+        self.net_line.setText(f"Net focus {fmt_min(self.focus_min)} min \u00B7 {self._taken} min taken out"
+                              if self._taken else "")
+        self.net_line.setVisible(bool(self._taken))
+        for b in self.app_buttons.values():
+            b.setText(("\u2713 " if b.isChecked() else "") + b.property("label"))
 
     def _build_app_buttons(self):
         """One toggle per app used a minute or more this round; pressed = distracting."""
@@ -4933,9 +5130,11 @@ class SessionCard(QWidget):
             self.app_grid.removeWidget(b)
             b.deleteLater()
         self.app_buttons = {}
-        apps = [a for a, m in self.app_totals() if m >= 1][:8]   # ponytail: 8 biggest, the rest are noise
-        for i, a in enumerate(apps):
-            b = QPushButton(short_text(a.removesuffix(".exe"), 18), self.mark_row)
+        apps = [(a, m) for a, m in self.app_totals() if m >= 1][:8]   # ponytail: 8 biggest, the rest are noise
+        for i, (a, m) in enumerate(apps):
+            b = QPushButton(self.mark_row)
+            b.setProperty("label", f"{short_text(a.removesuffix('.exe'), 14)}  {fmt_min(round(m))} min")
+            b.setText(b.property("label"))
             b.setObjectName("appChip")
             b.setToolTip(a)
             b.setCheckable(True)
@@ -4961,8 +5160,8 @@ class SessionCard(QWidget):
         if taken:
             self.focus_min = max(0, self.focus_min - taken)
             self.nums[0].setText(fmt_min(self.focus_min))
-            self._taken = True                   # don't offer it twice
-            self.b_take.hide()
+            self._taken = taken
+            self._show_apps()
             self._fit_open_card()
 
     def _ask_again(self):
@@ -5072,6 +5271,7 @@ CIRCLE_COLORS = {"white": ("White", "#ffffff", "#eef3f9", "#aebfd2", "#ffffff"),
                  "midnight": ("Midnight", "#7489dc", "#34438f", "#151c45", "#8397e6"),
                  "mustard": ("Mustard", "#e6c46a", "#a8822a", "#56420f", "#eecf7a"),
                  "graphite": ("Graphite", "#8e939c", "#4a4e56", "#202328", "#9ea3ab")}
+CIRCLE_LOOKS = [("auto", ("Auto: white on dark, midnight on light", "#ffffff"))] + list(CIRCLE_COLORS.items())
 CIRCLE_SHAPES = {"cloud": "Thought cloud", "circle": "Circle", "squircle": "Squircle (soft square)",
                  "pebble": "Pebble (hand-made look)", "capsule": "Capsule (wide and calm)",
                  "diamond": "Soft diamond", "oval": "Oval (tall and simple)",
@@ -5097,12 +5297,12 @@ class Bubble(QWidget):
         self.setFixedSize(self.SIZE, self.SIZE)
         self.setAcceptDrops(True)
         self.count = 0
-        self.show_count = True
+        self.show_count = False
         self.save_ok = True
         self.timer = None            # FocusTimer, set by main()
-        self.timer_display = "ring"  # ring | time | hidden
+        self.timer_display = "time"  # ring | time | hidden
         self.ring_style = "ember"    # see RING_STYLES
-        self.color_key = "auto"      # see CIRCLE_COLORS; "auto" = white on dark, midnight on light
+        self.color_key = "white"     # see CIRCLE_COLORS; "auto" = white on dark, midnight on light
         self.shape = "cloud"         # see CIRCLE_SHAPES
         self.scale = 1.0
         self.drop_handler = None     # callable(QMimeData) -> bool, set by main()
@@ -6658,6 +6858,9 @@ class AskDialog(QDialog):
         if self.value() is None:
             self.field.setFocus()
             self.field.selectAll()
+            if self.limits:
+                QToolTip.showText(self.field.mapToGlobal(QPoint(0, self.field.height())),
+                                  f"{self.limits[0]} to {self.limits[1]} min", self.field)
             return
         self.accept()
 
@@ -6680,7 +6883,11 @@ def take_out_drift(timer, parent):
         return 0
     minutes = ask(parent, "Minutes you drifted", min(5, most), [c for c in (2, 5, 10, 15) if c <= most],
                   "min", (1, most))
-    return timer.take_out(minutes) if minutes else 0
+    taken = timer.take_out(minutes) if minutes else 0
+    if taken:
+        QToolTip.showText(QCursor.pos(), f"Noted. Took out {taken} min. Net focus so far {timer.drifted_max()} min.",
+                          None, QRect(), 4000)
+    return taken
 
 
 def ask(parent, title, value="", chips=(), unit="", limits=None):
@@ -6705,33 +6912,26 @@ def edit_reminder(parent, current=None, anchor=None):
     return True, None if dialog.removed else dialog.value()
 
 
+def snooze_choices(settings):
+    """The three snooze lengths from Settings, in minutes, without repeats."""
+    times = []
+    for key, default in (("reminder_snooze_1", 5), ("reminder_snooze_2", 10), ("reminder_snooze_3", 30)):
+        try:
+            minutes = max(1, int(settings.get(key, default)))
+        except (ValueError, TypeError):
+            minutes = default
+        if minutes not in times:
+            times.append(minutes)
+    return times
+
+
 class ReminderAlert(QDialog):
     """A persistent note card grows from the cloud until dismissed or snoozed."""
 
     def __init__(self, task, settings, answered, bubble=None, note_actions=False):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.task, self.settings, self.answered, self.bubble = task, settings, answered, bubble
-        self.setWindowTitle("Note reminder")
-        self.setObjectName("reminderAlert")
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.tail_right = True
-        self.show_tail = True
-        self._tail_y = 40
-        self.setStyleSheet(f"""
-            QDialog#reminderAlert {{ background: transparent; border: none; }}
-            QDialog#reminderAlert QLabel {{ color: {C['text']}; }}
-            QDialog#reminderAlert QPushButton {{ background: {C['surface_hi']}; color: {C['text']};
-                border: 1px solid {C['border']}; border-radius: 7px; padding: 5px 10px; }}
-            QDialog#reminderAlert QPushButton:hover {{ background: {C['accent_soft']}; }}
-            QDialog#reminderAlert QPushButton#snoozeDefault {{ background: {C['accent']}; color: white;
-                border-color: {C['accent']}; }}
-            QDialog#reminderAlert QPushButton:focus {{ border-color: {C['text']}; }}
-            QDialog#reminderAlert QPushButton#stopRem {{ background: transparent; border: none; color: {C['dim']}; }}
-            QDialog#reminderAlert QPushButton#stopRem:hover {{ color: {C['anti']}; }}
-        """)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 17, 28, 18)
-        lay.setSpacing(8)
+        self.task, self.tasks = task, {task["id"]: task}
+        lay = self._shell(task, settings, answered, bubble)
         repeat = repeat_text((task.get("reminder") or {}).get("repeat"))
         heading = QLabel("Note reminder" + (f" · repeats {repeat}" if repeat else ""), self)
         heading.setStyleSheet(f"color: {C['accent_text']}; font-size: 12px; font-weight: 700;")
@@ -6760,28 +6960,9 @@ class ReminderAlert(QDialog):
             scroll.setWidgetResizable(True)
             scroll.setMaximumHeight(180)
             scroll.setFrameShape(QFrame.NoFrame)
-            scroll.setStyleSheet("background: transparent; border: none;")
+            scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
             lay.addWidget(scroll)
-        lay.addWidget(QLabel("Snooze for", self))
-        row = QHBoxLayout()
-        times = []
-        self.snooze_buttons = []
-        for key, default in (("reminder_snooze_1", 5), ("reminder_snooze_2", 10), ("reminder_snooze_3", 30)):
-            try:
-                minutes = max(1, int(settings.get(key, default)))
-            except (ValueError, TypeError):
-                minutes = default
-            if minutes not in times:
-                times.append(minutes)
-                button = QPushButton(f"{minutes} min", self)
-                button.clicked.connect(lambda _=False, m=minutes: self._answer(m))
-                row.addWidget(button)
-                self.snooze_buttons.append(button)
-        lay.addLayout(row)
-        primary = self.snooze_buttons[min(1, len(self.snooze_buttons) - 1)]
-        primary.setObjectName("snoozeDefault")
-        primary.setDefault(True)
-        self.default_snooze = times[self.snooze_buttons.index(primary)]
+        self._snooze_row(lay, "Snooze for")
         actions = QHBoxLayout()
         actions.setSpacing(6)
         self.open_button = self.done_button = None
@@ -6806,6 +6987,38 @@ class ReminderAlert(QDialog):
         actions.addWidget(dismiss)
         lay.addLayout(actions)
         self.dismiss_button = dismiss
+
+    def _shell(self, task, settings, answered, bubble):
+        """The parts every reminder card shares: look, ring and grow animation. Returns the layout."""
+        self.settings, self.answered, self.bubble = settings, answered, bubble
+        self.setWindowTitle("Note reminder")
+        self.setObjectName("reminderAlert")
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.tail_right = True
+        self.show_tail = True
+        self._tail_y = 40
+        self.setStyleSheet(f"""
+            QDialog#reminderAlert {{ background: transparent; border: none; }}
+            QDialog#reminderAlert QLabel {{ color: {C['text']}; }}
+            QDialog#reminderAlert QPushButton {{ background: {C['surface_hi']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 7px; padding: 5px 10px; }}
+            QDialog#reminderAlert QPushButton:hover {{ background: {C['accent_soft']}; }}
+            QDialog#reminderAlert QPushButton#snoozeDefault {{ background: {C['accent']}; color: white;
+                border-color: {C['accent']}; }}
+            QDialog#reminderAlert QPushButton:focus {{ border-color: {C['text']}; }}
+            QDialog#reminderAlert QPushButton#stopRem {{ background: transparent; border: none; color: {C['dim']}; }}
+            QDialog#reminderAlert QPushButton#stopRem:hover {{ color: {C['anti']}; }}
+            QDialog#reminderAlert QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
+            QDialog#reminderAlert QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 3px;
+                min-height: 30px; }}
+            QDialog#reminderAlert QScrollBar::handle:vertical:hover {{ background: {C['faint']}; }}
+            QDialog#reminderAlert QScrollBar::add-line:vertical, QDialog#reminderAlert QScrollBar::sub-line:vertical,
+            QDialog#reminderAlert QScrollBar::add-page:vertical,
+            QDialog#reminderAlert QScrollBar::sub-page:vertical {{ height: 0; background: none; }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 17, 28, 18)
+        lay.setSpacing(8)
         self.repeat_timer = QTimer(self)
         self.repeat_timer.timeout.connect(self._ring)
         self.ring_count = 0
@@ -6818,6 +7031,28 @@ class ReminderAlert(QDialog):
         self.anim.setDuration(420)
         self.anim.setEasingCurve(QEasingCurve.OutBack)
         self.anim.valueChanged.connect(self._step)
+        return lay
+
+    def _snooze_row(self, lay, label):
+        lay.addWidget(QLabel(label, self))
+        row = QHBoxLayout()
+        self.snooze_buttons = []
+        times = snooze_choices(self.settings)
+        for minutes in times:
+            button = QPushButton(f"{minutes} min", self)
+            button.clicked.connect(lambda _=False, m=minutes: self._answer(m))
+            row.addWidget(button)
+            self.snooze_buttons.append(button)
+        lay.addLayout(row)
+        primary = self.snooze_buttons[min(1, len(self.snooze_buttons) - 1)]
+        primary.setObjectName("snoozeDefault")
+        primary.setDefault(True)
+        self.default_snooze = times[self.snooze_buttons.index(primary)]
+
+    def forget(self, task_id):
+        """The note was done or its reminder removed elsewhere: close without answering."""
+        self._resolved = True
+        self.close()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -6920,6 +7155,106 @@ class ReminderAlert(QDialog):
             self._answer(self.default_snooze)
 
 
+class ReminderGroupAlert(ReminderAlert):
+    """Several notes due at once: one card and one ring, a row per note. Answering a row takes just that row
+    away; the buttons at the bottom answer every note left. Esc or close snoozes the rest."""
+
+    def __init__(self, tasks, settings, answered, bubble=None, note_actions=False):
+        QDialog.__init__(self, None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.tasks, self.rows = {t["id"]: t for t in tasks}, {}
+        lay = self._shell(tasks[0], settings, answered, bubble)
+        self.heading = QLabel(self)
+        self.heading.setStyleSheet(f"color: {C['accent_text']}; font-size: 12px; font-weight: 700;")
+        lay.addWidget(self.heading)
+        snooze = snooze_choices(settings)
+        snooze = snooze[min(1, len(snooze) - 1)]
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
+        for t in tasks:
+            row = QFrame(box)
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(5)
+            title = QLabel(t.get("title") or "Untitled", row)
+            title.setTextFormat(Qt.PlainText)
+            title.setWordWrap(True)
+            f = title.font()
+            f.setBold(True)
+            title.setFont(f)
+            h.addWidget(title, 1)
+            repeats = bool(repeat_text((t.get("reminder") or {}).get("repeat")))
+            buttons = ([("Done", "done", "It comes back next time; the note stays open" if repeats else "Tick it off")]
+                       if note_actions else [])
+            buttons += [(f"{snooze} min", snooze, f"Snooze this one for {snooze} min")]
+            buttons += ([("Open", "open", "Show it in the list")] if note_actions else
+                        [("Skip" if repeats else "Stop", 0, "Skip this time" if repeats else "Stop this reminder")])
+            for label, answer, tip in buttons:
+                b = QPushButton(label, row)
+                b.setToolTip(tip)
+                b.setAutoDefault(False)
+                b.clicked.connect(lambda _=False, task=t, a=answer: self._answer_row(task, a))
+                h.addWidget(b)
+            col.addWidget(row)
+            self.rows[t["id"]] = row
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidget(box)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
+        lay.addWidget(self.scroll)
+        self._snooze_row(lay, "Snooze all for")
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.dismiss_button = QPushButton("Stop all", self)
+        self.dismiss_button.setToolTip("Stop every reminder on this card (repeating ones skip to next time)")
+        self.dismiss_button.setObjectName("stopRem")
+        self.dismiss_button.setAutoDefault(False)
+        self.dismiss_button.clicked.connect(lambda: self._answer(0))
+        actions.addWidget(self.dismiss_button)
+        lay.addLayout(actions)
+        self._recount()
+
+    def _recount(self):
+        self.heading.setText(f"{len(self.rows)} note reminders" if len(self.rows) > 1 else "Note reminder")
+        rows = list(self.rows.values())
+        height = sum(r.sizeHint().height() for r in rows) + 6 * max(0, len(rows) - 1)
+        self.scroll.setFixedHeight(min(height, 6 * 40))      # ponytail: about 6 rows, then it scrolls
+        if self.isVisible() and self.anim.state() != QVariantAnimation.Running:
+            self.layout().activate()
+            self.resize(self.width(), self.sizeHint().height() + 4)
+
+    def _answer_row(self, task, answer):
+        self.forget(task["id"])
+        self.answered(task, answer)
+
+    def forget(self, task_id):
+        self.tasks.pop(task_id, None)
+        row = self.rows.pop(task_id, None)
+        if row:
+            row.hide()
+            row.deleteLater()
+        if self.tasks:
+            self._recount()
+        else:
+            self._resolved = True
+            self.repeat_timer.stop()
+            self.anim.stop()
+            self.hide()
+
+    def _answer(self, snooze_minutes):
+        """A bottom button, Esc or close: answer every note still on the card."""
+        self._resolved = True
+        self.repeat_timer.stop()
+        try:
+            for task in list(self.tasks.values()):
+                self.answered(task, snooze_minutes)
+        finally:
+            self.anim.stop()
+            self.hide()
+
+
 class NoteAlarmManager(QObject):
     def __init__(self, store, parent=None, on_change=None, bubble=None, panel=None):
         super().__init__(parent)
@@ -6934,27 +7269,33 @@ class NoteAlarmManager(QObject):
 
     def check_due(self):
         for task_id, alert in list(self.active.items()):
-            if alert.task.get("done") or not alert.task.get("reminder"):
-                alert._resolved = True
-                alert.close()
+            task = alert.tasks.get(task_id)
+            if not task or task.get("done") or not task.get("reminder"):
                 self.active.pop(task_id, None)
+                alert.forget(task_id)
         if self.active:
-            return  # show one note at a time, so none is hidden behind another
+            return  # ponytail: one card at a time; notes due meanwhile wait for it to close
         now = datetime.now(timezone.utc)
+        due = []
         for task in self.store.all_tasks():
             reminder = task.get("reminder")
-            if task.get("done") or not isinstance(reminder, dict) or task["id"] in self.active:
+            if task.get("done") or not isinstance(reminder, dict):
                 continue
             try:
-                due = parse_reminder_at(reminder["at"])
+                when = parse_reminder_at(reminder["at"])
             except (KeyError, ValueError, TypeError):
                 continue
-            if due <= now:
-                alert = ReminderAlert(task, self.store.settings, self._answered, self.bubble, bool(self.panel))
-                self.active[task["id"]] = alert
-                alert.show_from_cloud()
-                QTimer.singleShot(0, lambda a=alert: a._resolved or force_foreground(a))
-                break
+            if when <= now:
+                due.append((when, task))
+        if not due:
+            return
+        tasks = [t for _, t in sorted(due, key=lambda d: d[0])]       # earliest first
+        args = (self.store.settings, self._answered, self.bubble, bool(self.panel))
+        alert = ReminderAlert(tasks[0], *args) if len(tasks) == 1 else ReminderGroupAlert(tasks, *args)
+        for t in tasks:
+            self.active[t["id"]] = alert
+        alert.show_from_cloud()
+        QTimer.singleShot(0, lambda a=alert: a._resolved or force_foreground(a))
 
     def _answered(self, task, snooze_minutes):
         """snooze_minutes: minutes to snooze, 0 to stop, or "open" / "done" (both also stop it). A repeating
@@ -8199,7 +8540,8 @@ class IconAct(QToolButton):
 
 
 BREAK_COLOR = "#4fb6a8"
-DONE_TOASTS = ["Nice.", "One less thing.", "Off your plate.", "Checked off.", "That's handled.", "Lighter already."]
+DONE_TOASTS = ["Nice.", "One less thing.", "Off your plate.", "Checked off.", "That's handled.", "Lighter already.",
+               "Crossed off.", "Another one down.", "Done and dusted.", "Good riddance."]
 
 
 def play_icon(color):
@@ -8732,8 +9074,17 @@ class GrabHandle(QWidget):
     def leaveEvent(self, e):
         self.update()
 
+    def _system_move(self):
+        """Let Windows move the window: smooth, and it rescales right when the window crosses to a screen with
+        other scaling (the manual move jumped there). False where it isn't supported (offscreen)."""
+        handle = self.win.windowHandle()
+        return bool(handle and handle.startSystemMove())
+
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
+            if self._system_move():
+                self._press = None
+                return
             self._press = e.globalPosition().toPoint() - self.win.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, e):
@@ -10422,7 +10773,7 @@ class Panel(RoundedWindow):
         m = QMenu(self)
         m.setStyleSheet(STYLE)
         m.addAction("How it works", lambda: self.help.show_at(anchor.mapToGlobal(anchor.rect().bottomRight())))
-        m.addAction("Take the quick tour", lambda: getattr(self, "tour_starter", lambda: None)())
+        m.addAction("Take the tour", lambda: getattr(self, "tour_starter", lambda: None)())
         m.addSeparator()
         m.addAction(f"About {APP_NAME}", self.show_about)
         m.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
@@ -10434,7 +10785,7 @@ class Panel(RoundedWindow):
         box.setWindowTitle(f"About {APP_NAME}")
         box.setStyleSheet(STYLE + f"QMessageBox {{ background: {C['bg']}; }}")
         box.setTextFormat(Qt.RichText)
-        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>Made by {APP_AUTHOR}.<br><br>"
+        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>{APP_STORY}<br><br>Made by {APP_AUTHOR}.<br><br>"
                     f"Free and open source. If it helps you, a coffee helps me keep building it.<br><br>"
                     f"{link(GITHUB_URL, 'GitHub')}<br>{link(COFFEE_URL, 'Buy me a coffee')}<br><br>"
                     f"<span style='color:{C['dim']}'>Thoughts stay local. Calendar and phone alerts are optional. No tracking.</span>")
@@ -11643,6 +11994,1566 @@ def bubble_preview(bubble, color=None, shape=None):
         bubble.update()
 
 
+def tour_looks(bubble):
+    """Pictures of the real cloud for the tour's scenes: as it is, in a few shapes and colours, and the default."""
+    b = bubble
+    return dict(cloud=bubble_preview(b), bubble=b, default=bubble_preview(b, "white", "cloud"),
+                shapes=[(CIRCLE_SHAPES[s].split(" (")[0], bubble_preview(b, shape=s))
+                        for s in ("circle", "squircle", "hexagon", "speech")],
+                colors=[(CIRCLE_COLORS[c][0], bubble_preview(b, color=c, shape="cloud"))
+                        for c in ("maroon", "forest", "teal", "midnight")])
+
+
+# ---------------------------------------------------------------- welcome tour
+EMOJI_FONTS = ["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol"]
+
+
+def reduced_motion():
+    """True when Windows "Show animations" is off, so the tour shows still pictures. False off Windows."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        on = ctypes.c_int(1)
+        ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0)   # SPI_GETCLIENTAREAANIMATION
+        return not on.value
+    except Exception:
+        return False
+
+
+def _seg(t, a, b):
+    """How far along t is between a and b, 0..1, eased out (fast start, soft stop, no overshoot)."""
+    x = min(1.0, max(0.0, (t - a) / (b - a)))
+    return 1 - (1 - x) ** 3
+
+
+def _emoji(p, center, px, text, opacity=1.0):
+    f = QFont()
+    f.setFamilies(EMOJI_FONTS)
+    f.setPixelSize(int(px))
+    p.save()
+    p.setOpacity(p.opacity() * opacity)
+    p.setFont(f)
+    p.setPen(QColor(C["text"]))          # colour emoji ignore this; a plain fallback stays visible
+    p.drawText(QRectF(center.x() - px, center.y() - px, 2 * px, 2 * px), Qt.AlignCenter, text)
+    p.restore()
+
+
+def _chip(p, rect, text, fg=None, bg=None, px=11, bold=False, opacity=1.0):
+    """A pill with text, e.g. a flag chip or a "Parked." toast."""
+    p.save()
+    p.setOpacity(p.opacity() * opacity)
+    p.setPen(QPen(QColor(C["border"]), 1))
+    p.setBrush(QColor(bg or C["surface_hi"]))
+    p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+    f = QFont()
+    f.setFamilies(["Segoe UI"] + EMOJI_FONTS)
+    f.setPixelSize(px)
+    f.setBold(bold)
+    p.setFont(f)
+    p.setPen(QColor(fg or C["text"]))
+    p.drawText(rect, Qt.AlignCenter, text)
+    p.restore()
+
+
+def _card(p, rect, fill=None, edge=None, radius=10):
+    p.save()
+    p.setPen(QPen(QColor(edge or C["border"]), 1))
+    p.setBrush(QColor(fill or C["surface"]))
+    p.drawRoundedRect(rect, radius, radius)
+    p.restore()
+
+
+def _keycap(p, rect, text, down=0.0):
+    """A keyboard key; down 0..1 presses it in."""
+    p.save()
+    r = rect.translated(0, 3 * down)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(C["border"]))
+    p.drawRoundedRect(rect.translated(0, 3), 7, 7)          # the key's side
+    _card(p, r, C["accent_soft"] if down > 0.5 else C["surface_hi"], radius=7)
+    f = QFont()
+    f.setPixelSize(13)
+    f.setBold(True)
+    p.setFont(f)
+    p.setPen(QColor(C["text"]))
+    p.drawText(r, Qt.AlignCenter, text)
+    p.restore()
+
+
+def _cloud(p, center, size, pix=None):
+    """The user's own cloud (bubble_preview picture), or a plain round stand-in when there is none."""
+    r = QRectF(center.x() - size / 2, center.y() - size / 2, size, size)
+    if pix is not None and not pix.isNull():
+        pm = pix.scaled(int(size), int(size), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        p.drawPixmap(QPointF(center.x() - pm.width() / 2, center.y() - pm.height() / 2), pm)
+        return r
+    p.save()
+    p.setPen(QPen(QColor(C["border"]), 1))
+    p.setBrush(QColor("#ffffff"))
+    p.drawEllipse(r)
+    p.restore()
+    return r
+
+
+def _text(p, rect, text, px=12, color=None, align=Qt.AlignLeft | Qt.AlignVCenter, bold=False, opacity=1.0):
+    f = QFont()
+    f.setFamilies(["Segoe UI"] + EMOJI_FONTS)
+    f.setPixelSize(px)
+    f.setBold(bold)
+    p.save()
+    p.setOpacity(p.opacity() * opacity)
+    p.setFont(f)
+    p.setPen(QColor(color or C["text"]))
+    p.drawText(rect, align, text)
+    p.restore()
+
+
+def _mix(a, b, x):
+    return QPointF(a.x() + (b.x() - a.x()) * x, a.y() + (b.y() - a.y()) * x)
+
+
+def _rmix(a, b, x):
+    return QRectF(_mix(a.topLeft(), b.topLeft(), x), _mix(a.bottomRight(), b.bottomRight(), x))
+
+
+def _flight(p, a, b, x, text, lift=40, w=130, stripe=None):
+    """A note flying from a to b on an arc with a short fading trail; it shrinks as it lands."""
+    if not 0 < x < 1:
+        return
+    for back, op in ((0.15, 0.12), (0.1, 0.22), (0.05, 0.35), (0.0, 1.0)):
+        y = x - back
+        if y <= 0:
+            continue
+        c = _mix(a, b, y) - QPointF(0, math.sin(y * math.pi) * lift)
+        s = 1 - 0.6 * y
+        p.save()
+        p.setOpacity(p.opacity() * op)
+        p.translate(c)
+        p.scale(s, s)
+        r = QRectF(-w / 2, -13, w, 26)
+        if back:   # the trail is blank pills; only the note itself has text
+            _card(p, r, C["card"], radius=13)
+            p.restore()
+            continue
+        _chip(p, r, text, None, C["card"], 11)
+        if stripe:
+            p.fillRect(QRectF(r.left() + 9, -7, 4, 14), QColor(stripe))
+        p.restore()
+
+
+def _person(p, x, desk, turn=0.0, typing=None):
+    """Someone at a desk, facing right. turn 0..1 turns the head to look at you; typing (a time) moves the hand."""
+    p.save()
+    p.setPen(QPen(QColor(C["border"]), 1))
+    p.setBrush(QColor(C["accent_soft"]))
+    p.drawRoundedRect(QRectF(x - 24, desk - 60, 48, 64), 20, 20)
+    hand = QPointF(x + 58, desk - 6)
+    if typing is not None:
+        hand += QPointF(3 * math.sin(typing * 23), -3 * abs(math.sin(typing * 17)))
+    p.setPen(QPen(QColor(C["faint"]), 8, Qt.SolidLine, Qt.RoundCap))
+    p.drawLine(QPointF(x + 8, desk - 40), hand)
+    head = QPointF(x + 6 * (1 - turn), desk - 78)
+    p.setPen(QPen(QColor(C["border"]), 1))
+    p.setBrush(QColor(C["surface_hi"]))
+    p.drawEllipse(head, 17, 17)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(C["text"]))
+    for dx in (-6, 6):
+        p.drawEllipse(QPointF(head.x() + 11 * (1 - turn) + dx * turn, head.y() - 2), 2.2, 2.2)
+    p.restore()
+
+
+def _laptop(p, screen):
+    """An open laptop: a dark bezel round `screen` and a thin base under it. Draw what's on screen after."""
+    p.save()
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#2b3038"))
+    p.drawRoundedRect(screen.adjusted(-7, -7, 7, 7), 9, 9)
+    p.setBrush(QColor("#9aa3ad"))
+    p.drawRoundedRect(QRectF(screen.left() - 26, screen.bottom() + 7, screen.width() + 52, 7), 3, 3)
+    p.setBrush(QColor(C["surface"]))
+    p.drawRect(screen)
+    p.restore()
+
+
+def _taskbar(p, rect, clock="2:58 PM"):
+    """A Windows taskbar: app icons in the middle, the clock at the right."""
+    p.fillRect(rect, QColor(C["surface_hi"]))
+    p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), 1), QColor(C["border"]))
+    s = rect.height() - 8
+    for i, col in enumerate((C["accent"], C["faint"], C["faint"], C["faint"])):
+        p.fillRect(QRectF(rect.center().x() - 2 * (s + 6) + i * (s + 6), rect.top() + 4, s, s), QColor(col))
+    _text(p, rect.adjusted(0, 0, -8, 0), clock, 9, C["dim"], Qt.AlignRight | Qt.AlignVCenter)
+
+
+def _browser(p, rect, url, tab):
+    """A browser window with one tab and an address bar. Returns the page's rect."""
+    _card(p, rect, C["surface"], radius=8)
+    p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 38), QColor(C["surface_hi"]))
+    _card(p, QRectF(rect.left() + 8, rect.top() + 4, 120, 16), C["surface"], radius=4)
+    _text(p, QRectF(rect.left() + 14, rect.top() + 4, 110, 16), tab, 9, C["dim"])
+    bar = QRectF(rect.left() + 8, rect.top() + 22, rect.width() - 16, 14)
+    _card(p, bar, C["field"], radius=7)
+    _text(p, bar.adjusted(8, 0, -4, 0), url, 9, C["dim"])
+    return QRectF(rect.left() + 1, rect.top() + 39, rect.width() - 2, rect.height() - 40)
+
+
+def _day_grid(p, page, first=9, n=4):
+    """Hour lines down a calendar page; returns where an hour sits (h may be a fraction)."""
+    row = (page.height() - 8) / n
+    for i in range(n):
+        y = page.top() + 4 + row * i
+        p.fillRect(QRectF(page.left() + 30, y, page.width() - 36, 1), QColor(C["border"]))
+        _text(p, QRectF(page.left() + 2, y - 6, 24, 12), str((first + i - 1) % 12 + 1), 9, C["faint"],
+              Qt.AlignRight | Qt.AlignVCenter)
+    return lambda h: page.top() + 4 + row * (h - first)
+
+
+def _event(p, page, y, hour, text, color, opacity=1.0):
+    """One event block on a _day_grid page, 45 minutes long."""
+    r = QRectF(page.left() + 34, y(hour) + 2, page.width() - 44, y(hour + 0.75) - y(hour) - 2)
+    p.save()
+    p.setOpacity(p.opacity() * opacity)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(color))
+    p.drawRoundedRect(r, 4, 4)
+    p.restore()
+    _text(p, r.adjusted(6, 0, -4, 0), text, 10, "#ffffff", bold=True, opacity=opacity)
+
+
+def _feed(p, rect):
+    """A camera picture's dark background."""
+    p.save()
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#3a434f"))
+    p.drawRoundedRect(rect, 10, 10)
+    p.restore()
+
+
+def _avatar(p, center, s=1.0):
+    """A head and shoulders, as a camera sees you."""
+    p.save()
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#8d99a8"))
+    p.drawEllipse(QPointF(center.x(), center.y() - 14 * s), 17 * s, 20 * s)
+    p.drawRoundedRect(QRectF(center.x() - 36 * s, center.y() + 12 * s, 72 * s, 40 * s), 24 * s, 24 * s)
+    p.restore()
+
+
+def _print(p, rect, date=""):
+    """A daily photo: an instant-camera print with the date along its white bottom edge."""
+    _card(p, rect, "#ffffff", "#d0d5dc", radius=3)
+    pic = rect.adjusted(4, 4, -4, -rect.height() * 0.24)
+    p.fillRect(pic, QColor("#3a434f"))
+    p.save()
+    p.setClipRect(pic)
+    _avatar(p, pic.center() + QPointF(0, pic.height() * 0.1), pic.width() / 80)
+    p.restore()
+    if date:
+        _text(p, QRectF(rect.left(), pic.bottom(), rect.width(), rect.bottom() - pic.bottom()), date,
+              max(6, int(rect.height() * 0.11)), "#555b66", Qt.AlignCenter)
+
+
+def _ring(p, b, center, size, frac, now, style=None):
+    """The real cloud's countdown outline (Bubble._draw_<style>), scaled to a cloud drawn `size` px wide."""
+    s = size / b.SIZE
+    c, R = b.SIZE / 2, b.RING_R
+    p.save()
+    p.translate(center.x() - c * s, center.y() - c * s)
+    p.scale(s, s)
+    draw = getattr(b, "_draw_" + (style or b.ring_style), b._draw_ember)
+    draw(p, c, QRectF(c - R, c - R, 2 * R, 2 * R), frac, int(-360 * 16 * frac), now, *b.PALETTE["focus"])
+    p.restore()
+
+
+SCENE_W, SCENE_H = 700, 240     # scenes draw in this box; the stage scales it to fit
+SCENE_END, SCENE_LOOP = 5.0, 6.5   # moves end at 5 s (a slide can ask for more), the last frame holds 1.5 s
+
+
+def scene_hello(p, t, k):
+    desk = 200
+    p.fillRect(QRectF(24, desk, 420, 3), QColor(C["border"]))
+    scr = QRectF(196, 78, 196, 108)
+    _laptop(p, scr)
+    left = 640 * (0.45 * min(1.0, t / 1.4) + 0.55 * min(1.0, max(0.0, t - 6.6) / 1.8))
+    for i, w in enumerate((150, 120, 160, 90, 120)):            # what they're typing
+        if left <= 0:
+            break
+        p.fillRect(QRectF(scr.left() + 16, scr.top() + 16 + 18 * i, min(w, left), 6), QColor(C["border"]))
+        left -= w
+    typing = t < 1.4 or 6.6 < t < 8.4
+    _person(p, 116, desk, _seg(t, 1.6, 2.1) - _seg(t, 6.1, 6.6), t if typing else None)
+    home = _mix(QPointF(780, 70), QPointF(590, 112), _seg(t, 3.2, 4.4))
+    home -= QPointF(0, 16 * math.sin(math.pi * _seg(t, 6.0, 6.5)))          # a happy hop
+    _cloud(p, home, 92, k.get("cloud"))
+    hi = _seg(t, 4.4, 4.7) - _seg(t, 5.8, 6.0)
+    if hi > 0:
+        _chip(p, QRectF(home.x() - 22, home.y() - 76, 44, 24), "Hi!", C["text"], C["toast"], 12, True, hi)
+    text = "\U0001F4A1 Email Sam back!"
+    pop, drift, pull = _seg(t, 1.0, 1.35), _seg(t, 2.2, 4.6), _seg(t, 4.6, 6.0)
+    spot = QPointF(150 + 50 * drift, 36 - 6 * drift + 4 * math.sin(drift * 6))
+    if pop > 0 and pull == 0:
+        p.save()
+        p.setOpacity(1 - 0.5 * drift)                      # the thought fades while it waits
+        p.translate(spot)
+        p.scale(pop, pop)
+        _chip(p, QRectF(-72, -13, 144, 26), text, None, C["card"], 11)
+        p.restore()
+    _flight(p, spot, home, pull, text, 30, 144)
+    done = _seg(t, 6.0, 6.3)
+    if done > 0:
+        _chip(p, QRectF(home.x() - 44, home.y() + 54, 88, 24), "Parked ✓", C["text"], C["toast"], 11, opacity=done)
+
+
+def scene_park(p, t, k):
+    doc = QRectF(30, 92, 236, 128)
+    _card(p, doc, C["surface"])
+    for i, w in enumerate((190, 160, 176)):
+        p.fillRect(QRectF(doc.left() + 18, doc.top() + 22 + 24 * i, w, 6), QColor(C["border"]))
+    last = 30 + 50 * _seg(t, 0.0, 1.0) + 80 * _seg(t, 4.8, 6.0)
+    y = doc.top() + 94
+    p.fillRect(QRectF(doc.left() + 18, y, last, 6), QColor(C["border"]))
+    if not 1.0 < t < 4.6 or int(t * 2.5) % 2 == 0:          # the caret blinks while the thought is parked
+        p.fillRect(QRectF(doc.left() + 21 + last, y - 5, 2, 16), QColor(C["accent"]))
+    keys = [s for s in (k.get("hotkey") or "").split("+") if s]
+    x = 300
+    if keys:
+        for i, key in enumerate(keys):
+            w = max(44, 14 + 9 * len(key))
+            down = _seg(t, 0.2 + 0.3 * i, 0.4 + 0.3 * i) - _seg(t, 1.3, 1.5)
+            _keycap(p, QRectF(x, 24, w, 34), key, max(0.0, down))
+            x += w + 10
+    else:                                   # no hotkey: a scribble up and down
+        path = QPainterPath(QPointF(300, 40))
+        for i in range(int(8 * _seg(t, 0.2, 1.4))):
+            path.lineTo(QPointF(312 + 12 * i, 22 if i % 2 == 0 else 60))
+        p.setPen(QPen(QColor(C["accent_text"]), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPath(path)
+    slide, fly = _seg(t, 1.5, 2.0), _seg(t, 3.6, 4.6)
+    words = "Email the slides"
+    if slide > 0 and fly == 0:
+        box = QRectF(300 - 30 * (1 - slide), 82, 250, 34)
+        p.save()
+        p.setOpacity(slide)
+        _card(p, box, C["surface"], C["accent"])
+        _text(p, box.adjusted(12, 0, -10, 0), words[:int(len(words) * _seg(t, 2.0, 3.2) + 0.001)], 13)
+        p.restore()
+    _keycap(p, QRectF(494, 124, 56, 28), "Enter", _seg(t, 3.3, 3.45) - _seg(t, 3.5, 3.6))
+    home = QPointF(636, 110)
+    _cloud(p, home, 80, k.get("cloud"))
+    _flight(p, QPointF(425, 99), home, fly, words, 40, 130)
+    pop = _seg(t, 4.6, 4.9)
+    if pop > 0:
+        _chip(p, QRectF(596, 158, 80, 24), "Parked ✓", C["text"], C["toast"], 11, opacity=pop)
+
+
+def scene_flags(p, t, k):
+    flags = list(k.get("flags") or [])
+    box = QRectF(40, 20, 300, 34)
+    sent = _seg(t, 2.6, 3.6)
+    _card(p, box, C["surface"], C["accent"])
+    _text(p, box.adjusted(14, 0, -10, 0), "Call the dentist" if sent == 0 else "", 13)
+    alt = _seg(t, 0.7, 0.85) - _seg(t, 2.1, 2.25)
+    _keycap(p, QRectF(358, 22, 48, 30), "Alt", alt)
+    _keycap(p, QRectF(414, 22, 36, 30), "1", _seg(t, 1.4, 1.5) - _seg(t, 1.7, 1.8))
+    _keycap(p, QRectF(458, 22, 58, 30), "Enter", _seg(t, 2.4, 2.5) - _seg(t, 2.6, 2.7))
+    new = _seg(t, 6.5, 6.9)
+    row = flags + ([("\U0001F4DA", "study", "accent")] if new > 0 else [])
+    for i, (icon, word, ckey) in enumerate(row):
+        r = QRectF(40 + 86 * i, 64, 80, 24)
+        lit = i == 0 and 1.5 <= t < 3.6
+        p.save()
+        if i == len(flags):                            # your own flag pops into the row
+            p.translate(r.center())
+            p.scale(new, new)
+            p.translate(-r.center())
+        _chip(p, r, f"{icon} {word}", C[ckey] if lit else C["dim"],
+              C.get(ckey + "_bg", C["surface_hi"]) if lit else C["surface_hi"], 10, lit)
+        p.restore()
+        if alt > 0 and i < 9:                          # holding Alt shows each flag's number
+            badge = QRectF(r.right() - 12, r.top() - 7, 16, 16)
+            p.save()
+            p.setOpacity(alt)
+            p.setPen(QPen(QColor("#1b1f24"), 1))
+            p.setBrush(QColor("#3a4150"))
+            p.drawEllipse(badge)
+            p.restore()
+            _text(p, badge, str(i + 1), 10, "#ffffff", Qt.AlignCenter, True, alt)
+    home = QPointF(620, 168)
+    _cloud(p, home, 72, k.get("cloud"))
+    _flight(p, QPointF(190, 37), home, sent, "Call the dentist", 30, 130, C[flags[0][2]] if flags else None)
+    landed = _seg(t, 3.6, 3.9) - _seg(t, 5.0, 5.4)
+    if landed > 0:
+        _chip(p, QRectF(580, 208, 80, 22), "Parked ✓", C["text"], C["toast"], 10, opacity=landed)
+    card = _seg(t, 4.0, 4.5)
+    if card <= 0:
+        return
+    p.save()
+    p.setOpacity(card)
+    _card(p, QRectF(40, 104, 340, 120), C["surface"])
+    _text(p, QRectF(56, 110, 300, 22), "Settings > Flags", 11, C["dim"], bold=True)
+    field = QRectF(56, 140, 190, 32)
+    _card(p, field, C["field"], C["accent"], radius=7)
+    _text(p, field.adjusted(10, 0, -6, 0), "\U0001F4DA " + "Study"[:int(5 * _seg(t, 4.8, 5.6) + 0.001)], 12)
+    add = QRectF(256, 140, 80, 32)
+    press = 1 - 0.08 * (_seg(t, 5.9, 6.0) - _seg(t, 6.1, 6.2))
+    p.translate(add.center())
+    p.scale(press, press)
+    p.translate(-add.center())
+    _chip(p, add, "Add", "#ffffff", C["accent"], 12, True)
+    p.restore()
+    _text(p, QRectF(56, 180, 300, 30), "Pick an icon, a name and a color.", 11, C["faint"], opacity=card)
+    _flight(p, add.center(), QPointF(80 + 86 * len(flags), 76), _seg(t, 6.1, 6.5), "\U0001F4DA study", 20, 80)
+
+
+def scene_drop(p, t, k):
+    home = QPointF(300, 84)
+    _cloud(p, home, 84, k.get("cloud"))
+    hover = _seg(t, 1.0, 1.2) - _seg(t, 1.6, 1.7)
+    if hover > 0:                                      # the cloud shows it will take the file
+        p.save()
+        p.setOpacity(hover)
+        p.setPen(QPen(QColor(C["accent"]), 2, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(home, 52, 52)
+        p.restore()
+    if t < 1.7:
+        c = _mix(QPointF(70, 56), home + QPointF(0, 4), _seg(t, 0.3, 1.5))
+        gone = 1 - _seg(t, 1.5, 1.7)
+        _emoji(p, c, 28, "\U0001F4C4", gone)
+        _text(p, QRectF(c.x() - 40, c.y() + 18, 80, 16), "slides.pdf", 10, C["dim"], Qt.AlignCenter, opacity=gone)
+    keys = _seg(t, 2.0, 2.1) - _seg(t, 2.3, 2.4)
+    _keycap(p, QRectF(40, 150, 52, 30), "Ctrl", keys)
+    _keycap(p, QRectF(100, 150, 36, 30), "V", keys)
+    snip = _seg(t, 2.4, 3.2)
+    if 0 < snip < 1:
+        _emoji(p, _mix(QPointF(90, 130), home, snip) - QPointF(0, math.sin(snip * math.pi) * 40),
+               28 * (1 - 0.4 * snip), "\U0001F5BC️")
+    parked = max(_seg(t, 1.6, 1.8) - _seg(t, 2.3, 2.4), _seg(t, 3.2, 3.4))
+    if parked > 0:
+        _chip(p, QRectF(home.x() - 44, home.y() + 50, 88, 24), "Parked ✓", C["text"], C["toast"], 11,
+              opacity=parked)
+    show = _seg(t, 3.6, 4.0)
+    if show <= 0:
+        return
+    note = QRectF(440, 16, 236, 44)                    # later, in the list: copy it back out
+    p.save()
+    p.setOpacity(show)
+    _card(p, note, C["card"])
+    _text(p, note.adjusted(12, 0, -40, 0), "\U0001F4C4 slides.pdf", 12)
+    copy = QRectF(note.right() - 34, note.top() + 10, 24, 24)
+    if t < 4.6:
+        _card(p, copy, C["accent_soft"] if t > 4.4 else C["surface_hi"], radius=6)
+        p.setPen(QPen(QColor(C["dim"]), 1.4))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(copy.left() + 6, copy.top() + 8, 9, 11), 2, 2)
+        p.drawRoundedRect(QRectF(copy.left() + 10, copy.top() + 4, 9, 11), 2, 2)
+    else:
+        _text(p, copy, "✓", 15, C["glimmer"], Qt.AlignCenter, True)
+    p.restore()
+    mail = _seg(t, 5.0, 5.4)
+    if mail <= 0:
+        return
+    win = QRectF(440, 74, 236, 150)
+    p.save()
+    p.setOpacity(mail)
+    _card(p, win, C["surface"])
+    p.fillRect(QRectF(win.left() + 1, win.top() + 1, win.width() - 2, 22), QColor(C["surface_hi"]))
+    _text(p, QRectF(win.left() + 10, win.top() + 1, 200, 22), "New message", 10, C["dim"], bold=True)
+    _text(p, QRectF(win.left() + 10, win.top() + 28, 200, 18), "To: Sam", 11, C["faint"])
+    for i, w in enumerate((180, 140)):
+        p.fillRect(QRectF(win.left() + 12, win.top() + 60 + 16 * i, w, 5), QColor(C["border"]))
+    paste = _seg(t, 5.8, 5.9) - _seg(t, 6.1, 6.2)
+    _keycap(p, QRectF(334, 186, 52, 30), "Ctrl", paste)
+    _keycap(p, QRectF(392, 186, 36, 30), "V", paste)
+    att = _seg(t, 6.2, 6.5)
+    if att > 0:
+        _chip(p, QRectF(win.left() + 12, win.top() + 100, 130, 28), "\U0001F4CE slides.pdf", C["text"], C["surface_hi"],
+              11, opacity=att)
+    p.restore()
+
+
+def scene_decide(p, t, k):
+    shelf = QRectF(470, 196, 200, 30)
+    p.fillRect(QRectF(470, 222, 200, 4), QColor(C["border"]))
+    _text(p, QRectF(470, 226, 200, 14), "Later", 10, C["faint"], Qt.AlignCenter)
+    rows = (("Reply to Sam", "✓ Done", "glimmer"), ("Book flights", "Later", "urge"),
+            ("Tidy the desk", "\U0001F343 Let go", "dim"))
+    for i, (text, word, ckey) in enumerate(rows):
+        x = _seg(t, 1.0 + i, 2.0 + i)
+        r = QRectF(160, 24 + 64 * i, 260, 46)
+        op = 1.0
+        if i == 0:
+            r.translate(220 * x, 0)
+            op = 1 - x
+        elif i == 1:
+            end = QRectF(shelf.left() + 30, shelf.top() - 10, 140, 30)
+            r = _rmix(r, end, x)
+        else:
+            r.translate(0, -60 * x)
+            op = 1 - x
+        if op <= 0:
+            continue
+        p.save()
+        p.setOpacity(op)
+        _card(p, r, C["card"], C[ckey] if x > 0 else None)
+        _text(p, r.adjusted(14, 0, -8, 0), text, 13 if r.height() > 40 else 11)
+        p.restore()
+        if 0 < x < 1:
+            _chip(p, QRectF(r.right() - 74, r.top() - 12, 70, 22), word, C[ckey],
+                  C.get(ckey + "_bg", C["surface_hi"]))
+    if t >= 4.0:
+        _text(p, QRectF(40, 90, 120, 60), "Ctrl+Z puts it back", 11, C["faint"], Qt.AlignCenter | Qt.TextWordWrap,
+              opacity=_seg(t, 4.0, 4.5))
+
+
+def scene_reminders(p, t, k):
+    box = QRectF(40, 28, 290, 36)
+    gone = _seg(t, 3.0, 3.4)
+    if gone < 1:
+        p.save()
+        p.setOpacity(1 - gone)
+        _card(p, box, C["surface"], C["accent"])
+        words = "Call Sam at 3 pm"[:int(16 * _seg(t, 0.3, 1.8) + 0.001)]
+        lift = _seg(t, 2.0, 2.6)
+        if lift > 0:                                   # the time lifts out of the text into a chip
+            words = "Call Sam"
+            _chip(p, QRectF(box.left() + 96 - 40 * lift, box.top() + 4 + 40 * lift, 96, 26), "⏰ 3:00 PM",
+                  C["accent_text"], C["accent_soft"], 11, True)
+        _text(p, box.adjusted(14, 0, -10, 0), words, 13)
+        _keycap(p, QRectF(342, 31, 58, 30), "Enter", _seg(t, 2.8, 2.9) - _seg(t, 3.0, 3.1))
+        p.restore()
+    clock = _seg(t, 3.2, 3.6)
+    if clock > 0:
+        mid, r = QPointF(120, 168), 46
+        mins = 58 + 2 * _seg(t, 3.6, 5.0)                 # 2:58 ticks to 3:00
+        p.save()
+        p.setOpacity(clock)
+        p.setPen(QPen(QColor(C["border"]), 2))
+        p.setBrush(QColor(C["surface"]))
+        p.drawEllipse(mid, r, r)
+        for h in range(12):
+            a = math.radians(h * 30)
+            p.drawLine(QPointF(mid.x() + (r - 7) * math.sin(a), mid.y() - (r - 7) * math.cos(a)),
+                       QPointF(mid.x() + (r - 3) * math.sin(a), mid.y() - (r - 3) * math.cos(a)))
+        for turn, length, width in (((2 + mins / 60) / 12, 24, 3.5), (mins / 60, 36, 2)):
+            a = 2 * math.pi * turn
+            p.setPen(QPen(QColor(C["text"]), width, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(mid, QPointF(mid.x() + length * math.sin(a), mid.y() - length * math.cos(a)))
+        p.restore()
+        m = int(mins + 0.001)
+        _text(p, QRectF(186, 152, 90, 30), "3:00 PM" if m >= 60 else f"2:{m:02d} PM", 15, C["dim"], bold=True,
+              opacity=clock)
+    home = QPointF(590, 46)
+    ring = _seg(t, 5.0, 5.15) - _seg(t, 5.15, 5.4)
+    p.save()
+    p.translate(home)
+    p.rotate(8 * math.sin(t * 40) * ring)              # it rings
+    p.translate(-home)
+    _cloud(p, home, 64, k.get("cloud"))
+    p.restore()
+    grow = _seg(t, 5.2, 5.8)
+    if grow <= 0:
+        return
+    card = _rmix(QRectF(home.x() - 10, home.y(), 20, 10), QRectF(420, 86, 260, 136), grow)
+    p.save()
+    p.setOpacity(grow)
+    _card(p, card, C["toast"], C["toast_border"])
+    if grow > 0.9:
+        _text(p, QRectF(card.left() + 16, card.top() + 10, 200, 20), "⏰ 3:00 PM", 11, C["faint"])
+        _text(p, QRectF(card.left() + 16, card.top() + 30, 220, 30), "Call Sam", 16, bold=True)
+        for i, word in enumerate(("Snooze 5", "10", "30")):
+            _chip(p, QRectF(card.left() + 16 + (0, 80, 124)[i], card.top() + 82, (72, 38, 38)[i], 28), word, None, None, 11)
+        _chip(p, QRectF(card.right() - 76, card.top() + 82, 60, 28), "Done", "#ffffff", C["accent"], 11, True)
+    p.restore()
+
+
+def scene_patterns(p, t, k):
+    btn = QRectF(30, 28, 190, 40)
+    press = 1 - 0.07 * (_seg(t, 0.5, 0.6) - _seg(t, 0.7, 0.8))
+    p.save()
+    p.translate(btn.center())
+    p.scale(press, press)
+    p.translate(-btn.center())
+    _chip(p, btn, "✨ Copy for AI", "#ffffff", C["accent"], 13, True)
+    p.restore()
+    copied = _seg(t, 0.9, 1.2)
+    if copied > 0:
+        _chip(p, QRectF(30, 78, 190, 26), "✓ Copied with the prompt", C["glimmer"], C["glimmer_bg"], 11, True,
+              copied)
+    chat = QRectF(270, 12, 410, 216)
+    _card(p, chat, C["surface"])
+    _text(p, QRectF(chat.left() + 14, chat.top() + 6, 200, 20), "AI chat", 10, C["faint"], bold=True)
+    paste = _seg(t, 1.6, 2.0)
+    if paste > 0:
+        _chip(p, QRectF(chat.right() - 232, chat.top() + 30 + 8 * (1 - paste), 218, 28),
+              "\U0001F4C4 Park That Thought export", C["text"], C["accent_soft"], 11, opacity=paste)
+    finds = ("Thoughts start pulling at minute 18", "Best focus 9 to 11 am", "Email itches peak after lunch",
+             "Try: 20 min rounds after lunch")
+    for i, line in enumerate(finds):
+        x = _seg(t, 2.4 + 1.1 * i, 3.3 + 1.1 * i)
+        if x <= 0:
+            break
+        _text(p, QRectF(chat.left() + 18, chat.top() + 70 + 24 * i, 380, 22), "• " + line[:int(len(line) * x + 0.001)],
+              12, C["accent_text"] if i == 3 else C["text"], bold=i == 3)
+    save = _seg(t, 7.0, 7.3)
+    if save > 0:
+        r = QRectF(30, 150, 190, 34)
+        press = 1 - 0.07 * (_seg(t, 7.4, 7.5) - _seg(t, 7.6, 7.7))
+        p.save()
+        p.setOpacity(save)
+        p.translate(r.center())
+        p.scale(press, press)
+        p.translate(-r.center())
+        _chip(p, r, "\U0001F4BE Save the answer", C["text"], C["surface_hi"], 12, True)
+        p.restore()
+        _text(p, QRectF(24, 188, 236, 40), "Next time, it only tells you what's new.", 11, C["faint"],
+              Qt.AlignCenter | Qt.TextWordWrap, opacity=_seg(t, 7.7, 8.1))
+
+
+def scene_focus(p, t, k):
+    home, size = QPointF(330, 124), 168
+    b = k.get("bubble")
+    peek = _seg(t, 2.4, 3.0)
+    if peek > 0:                                       # a face peeks out from behind the cloud
+        _emoji(p, QPointF(home.x() + 46 + 22 * peek, home.y() - 40), 30, "\U0001F4A7")
+    _cloud(p, home, size, k.get("cloud"))
+    frac = 0.92 - 0.1 * t / 6
+    if b is not None:
+        _ring(p, b, home, size, frac, t)
+    else:
+        R = size * 21 / 56
+        p.setPen(QPen(QColor(C["timer"]), 5, Qt.SolidLine, Qt.RoundCap))
+        p.setBrush(Qt.NoBrush)
+        p.drawArc(QRectF(home.x() - R, home.y() - R, 2 * R, 2 * R), 90 * 16, int(-360 * 16 * frac))
+    secs = 24 * 60 + 59 - int(t)
+    B = size * 16 / 56
+    dark = b is None or b.body_key() == "white"       # the real cloud's rule: dark text on white
+    _text(p, QRectF(home.x() - B, home.y() - B / 2, 2 * B, B), f"{secs // 60}:{secs % 60:02d}", int(B * 0.5),
+          "#34465c" if dark else "#ffffff", Qt.AlignCenter, True)
+    if peek > 0:
+        _chip(p, QRectF(home.x() + 40, home.y() - 96, 150, 28), "\U0001F4A7 Sip some water", C["text"], C["toast"],
+              12, opacity=peek)
+
+
+def scene_meetings(p, t, k):
+    aside = _seg(t, 0.2, 1.2)
+    home = _mix(QPointF(330, 120), QPointF(612, 56), aside)
+    _cloud(p, home, 110 - 46 * aside, k.get("cloud"))
+    show = _seg(t, 0.8, 1.6)
+    if show <= 0:
+        return
+    scr = QRectF(30, 16, 460, 200)
+    p.save()
+    p.setOpacity(show)
+    _laptop(p, scr)
+    p.setClipRect(scr)
+    bury = _seg(t, 2.5, 3.8)
+    page = _browser(p, QRectF(44, 26, 300, 150), "calendar.google.com", "Calendar")
+    for d in range(5):                                  # a week grid with a few events
+        x = page.left() + 6 + 58 * d
+        p.fillRect(QRectF(x + 56, page.top() + 4, 1, page.height() - 8), QColor(C["border"]))
+        if d in (1, 3):
+            p.fillRect(QRectF(x + 4, page.top() + 20 + 24 * d, 48, 18), QColor(C["urge"]))
+    for i in range(3):                                  # other windows pile on top of it
+        x = _seg(t, 2.5 + 0.4 * i, 3.1 + 0.4 * i)
+        if x > 0:
+            _browser(p, QRectF(140 + 40 * i, 36 + 18 * i + 120 * (1 - x), 280, 140), ("mail.app", "docs.app",
+                     "chat.app")[i], ("Inbox", "Report", "Team chat")[i])
+    _text(p, QRectF(60, 150, 120, 18), "Where was it?", 11, C["faint"], opacity=bury * (1 - _seg(t, 4.0, 4.4)))
+    bar = _seg(t, 4.0, 4.5)
+    tb = QRectF(scr.left(), scr.bottom() - 26, scr.width(), 26)
+    _taskbar(p, tb)
+    if bar > 0:
+        meet = QRectF(tb.left() + 6, tb.top() + 3, 196 * bar, 20)
+        _card(p, meet, C["surface"], C["accent"], radius=6)
+        if bar > 0.9:
+            _text(p, meet.adjusted(8, 0, -46, 0), "Design review · in 2 min", 10)
+            _chip(p, QRectF(meet.right() - 42, meet.top() + 2, 38, 16), "Join", "#ffffff", C["accent"], 9, True)
+    p.restore()
+    head = _seg(t, 5.4, 6.0)
+    if head > 0:
+        card = QRectF(520 + 20 * (1 - head), 100, 170, 84)
+        p.save()
+        p.setOpacity(head)
+        _card(p, card, C["toast"], C["toast_border"])
+        _text(p, card.adjusted(14, 10, -10, -50), "IN 2 MIN", 10, C["accent_text"], bold=True)
+        _text(p, card.adjusted(14, 30, -10, -26), "Design review", 13, bold=True)
+        _chip(p, QRectF(card.left() + 14, card.bottom() - 28, 52, 20), "Join", "#ffffff", C["accent"], 10, True)
+        p.restore()
+
+
+def scene_google(p, t, k):
+    app = QRectF(30, 16, 270, 184)
+    _card(p, app, C["surface"])
+    _text(p, QRectF(app.left() + 12, app.top() + 4, 200, 22), "Next 3 days", 11, C["dim"], bold=True)
+    mine = QRectF(app.left() + 4, app.top() + 28, app.width() - 8, app.height() - 32)
+    ya = _day_grid(p, mine)
+    page = _browser(p, QRectF(400, 16, 280, 210), "calendar.google.com", "Google Calendar")
+    yg = _day_grid(p, page)
+    sync = max(_seg(t, 1.8, 2.0) - _seg(t, 2.2, 2.6), _seg(t, 5.4, 5.6) - _seg(t, 5.8, 6.2))
+    mid = QPointF(350, 110)
+    p.save()
+    p.translate(mid)
+    p.scale(1 + 0.3 * sync, 1 + 0.3 * sync)
+    p.translate(-mid)
+    _text(p, QRectF(320, 90, 60, 40), "⇄", 26, C["accent"] if sync > 0 else C["faint"], Qt.AlignCenter, True)
+    p.restore()
+    lunch = _seg(t, 0.8, 1.2)                          # beat 1: add it here...
+    if t < 0.9:
+        _chip(p, QRectF(app.right() - 34, app.top() + 4, 26, 22), "+", "#ffffff", C["accent"], 13, True)
+    if lunch > 0:
+        _event(p, mine, ya, 12, "Lunch with Sam", C["glimmer"], lunch)
+        _event(p, page, yg, 12, "Lunch with Sam", C["glimmer"], _seg(t, 2.2, 2.6))     # ...it shows in Google
+    drag = _seg(t, 4.3, 5.3)                           # beat 2: move it in Google...
+    _event(p, page, yg, 10 + drag, "Standup", C["urge"])
+    if 0 < drag < 1:
+        hand = QPointF(page.right() - 40, yg(10 + drag) + 12)
+        _emoji(p, hand, 16, "✋")
+    moved = _seg(t, 6.2, 6.7)                           # ...and the app follows
+    _event(p, mine, ya, 10 + moved, "Standup", C["urge"])
+    bar = QRectF(30, 206, 270, 24)
+    _card(p, bar, C["surface"], C["accent"], radius=6)
+    _text(p, bar.adjusted(10, 0, -6, 0), "Standup · " + ("11:00" if t >= 7.2 else "10:00"), 11)
+
+
+def scene_camera(p, t, k):
+    piece = QRectF(30, 200, 230, 26)
+    _card(p, piece, C["surface"], C["accent"], radius=6)
+    _text(p, piece.adjusted(10, 0, -40, 0), "Design review · in 2 min", 10)
+    cam = QRectF(piece.right() - 32, piece.top() + 3, 26, 20)
+    pulse = 0.5 + 0.5 * math.sin(t * 8) if t < 1.0 else 0.0
+    _card(p, cam, C["accent_soft"] if pulse > 0.5 else C["surface_hi"], radius=5)
+    _emoji(p, cam.center(), 11, "\U0001F4F7")
+    grow = _seg(t, 1.0, 1.7)
+    if grow <= 0:
+        return
+    win = _rmix(cam, QRectF(250, 8, 300, 186), grow)
+    p.save()
+    p.setOpacity(grow)
+    _card(p, win, C["surface"], radius=12)
+    if grow < 0.95:
+        p.restore()
+        return
+    feed = QRectF(win.left() + 10, win.top() + 10, win.width() - 20, 124)
+    _feed(p, feed)
+    p.save()
+    p.setClipRect(feed)
+    _avatar(p, feed.center() + QPointF(0, 12))
+    p.restore()
+    for i in range(5):                                 # mic level
+        h = 6 + 18 * abs(math.sin(t * 5 + i * 1.3))
+        p.fillRect(QRectF(feed.right() - 64 + 11 * i, feed.bottom() - 8 - h, 7, h), QColor(C["glimmer"]))
+    row = win.top() + 142
+    _chip(p, QRectF(win.left() + 10, row, 52, 30), "\U0001F4F7 ▾", None, C["accent_soft"] if t > 5.8 else None, 11)
+    _chip(p, QRectF(win.left() + 68, row, 52, 30), "\U0001F399️ ▾", None, None, 11)
+    rec = QRectF(win.right() - 120, row, 110, 30)
+    if t < 3.0:
+        _chip(p, rec, "Record 5 s", None, None, 11, True)
+    elif t < 5.2:
+        _chip(p, rec, f"Recording... {max(1, 5 - int((t - 3.0) * 5 / 2.2))}", "#ffffff", C["urgent"], 11, True)
+    else:
+        _chip(p, rec, "▶ Play", "#ffffff", C["accent"], 11, True)
+    p.restore()
+    menu = _seg(t, 5.8, 6.2)
+    if menu > 0:
+        m = QRectF(556, 30, 136, 120)
+        p.save()
+        p.setOpacity(menu)
+        _card(p, m, C["surface"], radius=8)
+        for i, (head, item) in enumerate((("Camera", "✓ Built-in"), ("Microphone", "✓ Headset"),
+                                          ("Speaker", "✓ Headset"))):
+            _text(p, QRectF(m.left() + 10, m.top() + 6 + 38 * i, 120, 16), head, 9, C["faint"], bold=True)
+            _text(p, QRectF(m.left() + 10, m.top() + 20 + 38 * i, 120, 18), item, 11)
+        p.restore()
+
+
+def scene_snaps(p, t, k):
+    prev = QRectF(30, 16, 200, 150)
+    _feed(p, prev)
+    p.save()
+    p.setClipRect(prev)
+    _avatar(p, prev.center() + QPointF(0, 10))
+    p.restore()
+    shot = _seg(t, 0.6, 0.7) - _seg(t, 0.8, 0.9)
+    shutter = QPointF(130, 192)
+    p.setPen(QPen(QColor(C["border"]), 2))
+    p.setBrush(QColor("#ffffff" if shot <= 0 else C["accent_soft"]))
+    p.drawEllipse(shutter, 18 - 3 * shot, 18 - 3 * shot)
+    flash = _seg(t, 0.7, 0.8) - _seg(t, 0.85, 1.2)
+    if flash > 0:
+        p.save()
+        p.setOpacity(flash * 0.9)
+        _card(p, prev, "#ffffff", "#ffffff", 10)
+        p.restore()
+    folder = QPointF(300, 196)
+    pile = 3 + int(_seg(t, 1.0, 2.0) > 0.99)
+    for i in range(pile):                              # the daily prints pile up in the folder
+        _print(p, QRectF(folder.x() - 28 + 3 * i, folder.y() - 74 - 4 * i, 56, 64), "")
+    drop = _seg(t, 1.0, 2.0)
+    if 0 < drop < 1:
+        _print(p, _rmix(QRectF(70, 40, 120, 136), QRectF(folder.x() - 28 + 9, folder.y() - 86, 56, 64), drop), "Oct 6")
+    _emoji(p, folder, 30, "\U0001F4C1")
+    _text(p, QRectF(folder.x() - 40, folder.y() + 14, 80, 18), "snaps", 10, C["dim"], Qt.AlignCenter)
+    play = _seg(t, 2.0, 2.4)
+    if play <= 0:
+        return
+    win = QRectF(380, 14, 300, 212)
+    p.save()
+    p.setOpacity(play)
+    _card(p, win, C["surface"])
+    feed = QRectF(win.left() + 10, win.top() + 10, win.width() - 20, 130)
+    _feed(p, feed)
+    fps = 6 if t < 4.0 else 12
+    frame = _timelapse_frame(t)
+    line_up = _seg(t, 4.6, 5.6)
+    rnd = random.Random(frame)
+    jx, jy, js = (rnd.uniform(-1, 1) for _ in range(3))
+    off = 1 - line_up                                  # lining up pulls every face to the same spot
+    p.save()
+    p.setClipRect(feed)
+    _avatar(p, feed.center() + QPointF(26 * jx * off, 10 + 12 * jy * off), 1 + 0.18 * js * off)
+    p.restore()
+    _text(p, QRectF(feed.left() + 8, feed.top() + 4, 120, 18), f"Oct {1 + frame % 30}", 10, "#ffffff")
+    _chip(p, QRectF(feed.right() - 54, feed.top() + 6, 46, 20), f"{fps}/s", "#ffffff", "#20262e", 10, True)
+    row = feed.bottom() + 12
+    _chip(p, QRectF(win.left() + 10, row, 130, 28), ("✓ " if line_up > 0 else "") + "Line up faces",
+          C["glimmer"] if line_up > 0 else None, C["glimmer_bg"] if line_up > 0 else None, 11, line_up > 0)
+    save = QRectF(win.right() - 120, row, 110, 28)
+    _chip(p, save, "Save video", "#ffffff", C["accent"] if t < 7.4 else C["glimmer"], 11, True)
+    p.restore()
+    done = _seg(t, 7.4, 7.8)
+    if done > 0:
+        _chip(p, QRectF(win.left() + 70, 198, 160, 24), "\U0001F3AC timelapse.mp4", C["text"],
+              C["toast"], 11, opacity=done)
+
+
+def _timelapse_frame(t):
+    """Which snap the timelapse shows at t: 6 a second from 2.4 s, 12 a second from 4 s, without skipping days."""
+    return int(6 * min(max(0.0, t - 2.4), 1.6) + 12 * max(0.0, t - 4.0))
+
+
+def scene_look(p, t, k):
+    b = k.get("bubble")
+    cloud = k.get("cloud")
+    names = {key: name for key, name, _d in RING_STYLES}
+    steps = [("Size", [(n, cloud, s) for n, s in (("Small", 0.82), ("Medium", 1.0), ("Large", 1.22),
+                                                   ("Extra large", 1.45))]),
+             ("Shape", [(n, pix, 1.0) for n, pix in k.get("shapes") or []]),
+             ("Color", [(n, pix, 1.0) for n, pix in k.get("colors") or []]),
+             ("Outline", [(names[key], cloud, 1.0, key) for key in names]),
+             ("Light or dark", [("Light", cloud, 1.0, None, "#f4f5f7"), ("Dark", cloud, 1.0, None, "#1e2228")])]
+    times = (0.0, 1.6, 3.6, 5.2, 6.6, 7.4)
+    i = max(j for j, s in enumerate(times) if t >= s)
+    if i == 5:                                         # it ends on the default cloud
+        x = _seg(t, 7.4, 7.8)
+        _cloud(p, QPointF(350, 110), 120 * (0.8 + 0.2 * x), k.get("default") or cloud)
+        _chip(p, QRectF(310, 182, 80, 26), "Default", C["accent_text"], C["accent_soft"], 12, True, x)
+        return
+    title, items = steps[i]
+    fade = _seg(t, times[i], times[i] + 0.3) * (1 - _seg(t, times[i + 1] - 0.25, times[i + 1]))
+    _text(p, QRectF(0, 10, SCENE_W, 26), title, 15, C["dim"], Qt.AlignCenter, True, fade)
+    n = max(1, len(items))
+    for j, item in enumerate(items):
+        name, pix, scale = item[:3]
+        c = QPointF(SCENE_W / 2 + (j - (n - 1) / 2) * min(150, 640 / n), 118)
+        p.save()
+        p.setOpacity(fade * _seg(t, times[i] + 0.1 * j, times[i] + 0.1 * j + 0.3))
+        if len(item) > 4:                              # light and dark backdrops
+            _card(p, QRectF(c.x() - 66, 50, 132, 140), item[4], item[4])
+        _cloud(p, c, 76 * scale, pix)
+        if len(item) > 3 and item[3] and b is not None:
+            _ring(p, b, c, 76, 0.7, t, item[3])
+        p.restore()
+        _text(p, QRectF(c.x() - 70, 196, 140, 20), name, 11, C["dim"], Qt.AlignCenter, opacity=fade)
+
+
+TOUR_TILES = [("\U0001F4AC", "Check-ins", "After a long stretch without a focus round, it asks if you want one."),
+              ("\U0001F50D", "Search", "Ctrl+F in the list searches titles and details, with filters and sort."),
+              ("\U0001F3B5", "Noise and music", "The ♫ at the top of the list plays brown, pink or white noise, or your "
+               "own songs."),
+              ("\U0001F634", "Nap timer", "Right-click the cloud > Nap timer for a quick timed rest."),
+              ("\U0001F558", "History", "Every thought you ever parked, with search and dates. ✨ > Browse history."),
+              ("\U0001F504", "One-click update", "Right-click the cloud > Restart / update gets the newest version. "
+               "Your notes stay."),
+              ("\U0001F6DF", "Nothing is lost", "Ctrl+Z puts back Done, Later and Let go. Nothing is deleted for good."),
+              ("❓", "Help any time", "The ? at the top of the list explains it all, and has this tour.")]
+
+
+def tour_tile_rects():
+    """Where each "More you can do" tile sits in the scene box (also used for its tooltip)."""
+    return [QRectF(32 + 162 * (i % 4), 40 + 96 * (i // 4), 150, 82) for i in range(len(TOUR_TILES))]
+
+
+def scene_tiles(p, t, k):
+    _text(p, QRectF(0, 8, SCENE_W, 24), "More you can do", 13, C["dim"], Qt.AlignCenter, True)
+    for i, ((icon, label, _tip), r) in enumerate(zip(TOUR_TILES, tour_tile_rects())):
+        pop = _seg(t, 0.2 + 0.25 * i, 0.6 + 0.25 * i)
+        if pop <= 0:
+            continue
+        p.save()
+        p.setOpacity(pop)
+        p.translate(0, 12 * (1 - pop))
+        _card(p, r, C["surface"])
+        _emoji(p, QPointF(r.center().x(), r.top() + 30), 22, icon)
+        _text(p, QRectF(r.left(), r.top() + 50, r.width(), 22), label, 13, align=Qt.AlignCenter, bold=True)
+        p.restore()
+
+
+def paint_scene(p, rect, scene, t, k, end=SCENE_END):
+    """Draws one scene at time t (seconds) scaled into rect. Moves stop at `end`; later t is the last frame."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    p.translate(rect.topLeft())
+    p.scale(rect.width() / SCENE_W, rect.height() / SCENE_H)
+    _card(p, QRectF(0.5, 0.5, SCENE_W - 1, SCENE_H - 1), C["field"], radius=14)
+    scene(p, min(max(t, 0.0), end), k)
+    p.restore()
+
+
+TOUR_CHAPTERS = ["Park", "Decide", "Focus", "Meetings", "Yours"]
+TOUR_FLAG_COLORS = {"urgent": "urgent", "distraction": "dist", "urge": "urge", "glimmer": "glimmer",
+                    "antiglimmer": "anti", "idea": "idea"}
+
+
+def tour_flags():
+    """The six built-in flags as (icon, word, colour key) for the scenes."""
+    return [(icon, word, TOUR_FLAG_COLORS[key]) for key, icon, word, _tip in BUILTIN_FLAG_DEFS]
+
+
+def tour_text(text, hotkey):
+    """Fills in the quick-note hotkey; with no hotkey, the scribble is the way in."""
+    if not hotkey:
+        text = text.replace("Press {hotkey} or scribble", "Scribble")
+    return text.replace("{hotkey}", hotkey or "")
+
+
+def _s(chapter, title, line, scene, card=None, note=None, secs=SCENE_END, live=None):
+    """One slide. card: (the old way, the cloud's way) for the comparison card; note: one line in its place
+    (privacy, mostly); secs: when the scene's moves end."""
+    return dict(chapter=chapter, title=title, line=line, scene=scene, card=card, note=note, secs=secs, live=live)
+
+
+TOUR_SLIDES = [
+    _s("Park", "Hi! Meet your thought cloud.", "A thought pops up while you work. Park it here, keep working.",
+       scene_hello, card=("Sticky notes, new tabs", "One key away, always on screen"), secs=8.5),
+    _s("Park", "Park it in two seconds.", "Press {hotkey} or scribble. Type it. Press Enter.", scene_park,
+       card=("Switching to a to-do app", "Two seconds, then back to work"), secs=6.5),
+    _s("Park", "Tag it with one tap.", "Tap a flag, or Alt+1 to 9. Make your own in Settings.", scene_flags, secs=8),
+    _s("Park", "Drop files, snips and links on the cloud.", "Copy them back out into an email or chat.", scene_drop,
+       secs=8),
+    _s("Decide", "At the break, decide.", "Done, Later or Let go. Changed your mind? Ctrl+Z puts it back.",
+       scene_decide),
+    _s("Decide", "Set a reminder as you type.", "Add at 3 pm or 20m to a note. It rings from the cloud.",
+       scene_reminders, card=("A phone alarm for every note", "The note itself comes back"), secs=8),
+    _s("Decide", "See your patterns with AI.", "Copy for AI adds a ready prompt. Paste it in any AI chat.",
+       scene_patterns, card=("Guessing why the day slipped", "Patterns from your own log"), secs=9),
+    _s("Focus", "Focus with the cloud.",
+       "Start a focus round. The countdown burns around the cloud, so you see time without a clock.", scene_focus,
+       secs=6),
+    _s("Meetings", "Your next meeting, on your taskbar.", "A small bar counts down to it. Click it for the next 3 days.",
+       scene_meetings, secs=8.5),
+    _s("Meetings", "Changes sync both ways.",
+       "Add or edit an event here or in Google Calendar. The other one updates.", scene_google,
+       note="\U0001F512 Your notes stay on this PC. Only your calendar talks to Google.", live="google", secs=9),
+    _s("Meetings", "Check your camera before a call.",
+       "The camera button on the meeting bar opens a private preview. Pick your camera, mic and speaker.",
+       scene_camera, card=("Finding out on the call", "A private check, nothing sent"), secs=8.5),
+    _s("Meetings", "A photo a day, then a timelapse.",
+       "Each snap is saved with its date. Play them back, line up faces, save a video.", scene_snaps,
+       note="\U0001F512 Photos stay on this PC.", secs=9),
+    _s("Yours", "Make it yours, any time.", "Right-click the cloud > Settings.", scene_look,
+       note="\U0001F648 Hides when you share your screen.", secs=8),
+    _s("Yours", "You're all set.", "Right-click the cloud any time for the timer, sounds and settings.", scene_tiles),
+]
+
+
+def tour_share(i):
+    """How far the progress bar runs on slide i: a chapter's first slide sits on its dot, the rest share the way
+    to the next dot, and the last slide fills the bar."""
+    if i == len(TOUR_SLIDES) - 1:
+        return 1.0
+    chapter = TOUR_SLIDES[i]["chapter"]
+    mates = [j for j, s in enumerate(TOUR_SLIDES) if s["chapter"] == chapter]
+    return (TOUR_CHAPTERS.index(chapter) + 0.5 + mates.index(i) / len(mates)) / len(TOUR_CHAPTERS)
+
+
+class TourSteps(QWidget):
+    """The chapter row (current in accent, done ones ticked) over a 3 px bar that eases to the slide's share."""
+    jump = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(40)
+        self.setCursor(Qt.PointingHandCursor)
+        self.chapter, self.share = 0, 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(250)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(self._set_share)
+
+    def _set_share(self, v):
+        self.share = float(v)
+        self.update()
+
+    def set_progress(self, chapter, share, animate=True):
+        self.chapter = chapter
+        self._anim.stop()
+        if animate and not reduced_motion():
+            self._anim.setStartValue(self.share)
+            self._anim.setEndValue(float(share))
+            self._anim.start()
+        else:
+            self._set_share(share)
+        self.update()
+
+    def _x(self, i):
+        return (i + 0.5) * self.width() / len(TOUR_CHAPTERS)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        y = 14
+        p.setPen(QPen(QColor(C["border"]), 1))
+        p.drawLine(QPointF(self._x(0), y), QPointF(self._x(len(TOUR_CHAPTERS) - 1), y))
+        for i, name in enumerate(TOUR_CHAPTERS):
+            c = QPointF(self._x(i), y)
+            now, done = i == self.chapter, i < self.chapter
+            if now:
+                halo = QColor(C["accent"])
+                halo.setAlpha(70)
+                p.setPen(Qt.NoPen)
+                p.setBrush(halo)
+                p.drawEllipse(c, 10, 10)
+            p.setPen(QPen(QColor(C["accent"] if now or done else C["faint"]), 1.5))
+            p.setBrush(QColor(C["accent"] if now or done else C["bg"]))
+            p.drawEllipse(c, 6, 6)
+            if done:
+                _text(p, QRectF(c.x() - 6, c.y() - 6, 12, 12), "✓", 9, "#ffffff", Qt.AlignCenter, True)
+            _text(p, QRectF(c.x() - 50, y + 8, 100, 14), name, 11, C["text"] if now else C["dim"], Qt.AlignCenter, now)
+        p.fillRect(QRectF(0, self.height() - 3, self.width(), 3), QColor(C["border"]))
+        p.fillRect(QRectF(0, self.height() - 3, self.width() * self.share, 3), QColor(C["accent"]))
+
+    def mousePressEvent(self, e):
+        self.jump.emit(min(len(TOUR_CHAPTERS) - 1, int(e.position().x() * len(TOUR_CHAPTERS) / max(1, self.width()))))
+
+
+class TourStage(QWidget):
+    """Plays one scene: a 24 px slide-in with a fade, then the scene loops 1.5 s after its moves end.
+    The 33 ms timer runs only while shown; with Windows animations off it shows the last frame and no timer."""
+
+    def __init__(self, kit, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(SCENE_W, SCENE_H)
+        self.kit, self.scene, self.still, self.end = kit, None, False, SCENE_END
+        self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self.update)
+
+    def set_scene(self, scene, end=SCENE_END):
+        self.scene, self.end, self.t0 = scene, end, time.monotonic()
+        self.update()
+
+    def scene_time(self):
+        loop = self.end + SCENE_LOOP - SCENE_END
+        return loop if self.still else (time.monotonic() - self.t0) % loop
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.still = reduced_motion()
+        if not self.still:
+            self.t0 = time.monotonic()
+            self.timer.start()
+
+    def hideEvent(self, e):
+        self.timer.stop()
+        super().hideEvent(e)
+
+    def event(self, e):
+        if e.type() == QEvent.ToolTip and self.scene is scene_tiles:     # the "More you can do" tiles explain themselves
+            tip = next((tip for (_i, _l, tip), r in zip(TOUR_TILES, tour_tile_rects()) if r.contains(QPointF(e.pos()))), "")
+            if tip:
+                QToolTip.showText(e.globalPos(), tip, self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(e)
+
+    def paintEvent(self, e):
+        if self.scene is None:
+            return
+        p = QPainter(self)
+        enter = 1.0 if self.still else _seg(time.monotonic() - self.t0, 0, 0.25)   # ease-out cubic, like OutCubic
+        p.setOpacity(enter)
+        paint_scene(p, QRectF(24 * (1 - enter), 0, SCENE_W, SCENE_H), self.scene, self.scene_time(), self.kit,
+                    self.end)
+
+
+
+class Onboarding(RoundedWindow):
+    """The picture tour: chapter steps, an animated scene, a headline, one line, then a comparison card (the old
+    way struck out, the cloud's way in green) or a one-line note, and on the Google slide the live Connect button.
+    A normal window in the taskbar, not on top, so Google's browser sign-in can come in front. At most 560 px tall,
+    so it fits a 768 px screen at 125%. Right/Enter next, Left back, Esc closes."""
+
+    TEXT_H = 150        # fixed text area, so the window never jumps between slides
+
+    def __init__(self, store, bubble, calendar, on_try, on_close=lambda: None):
+        super().__init__(Qt.Window)
+        self.store, self.bubble, self.calendar = store, bubble, calendar
+        self.on_try, self.on_close = on_try, on_close
+        self.i = 0
+        self.kit = dict(cloud=None, hotkey="", flags=tour_flags())
+        self.setObjectName("roundwin")
+        self.setWindowTitle("Welcome to Park That Thought")
+        self.setWindowIcon(app_icon())
+        self.setStyleSheet(self._css())
+        THEME["hooks"].append(self._restyle)
+        m = self.SHADOW
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20 + m, 8 + m - 2, 20 + m, 14 + m + 2)
+        lay.setSpacing(8)
+        top = QHBoxLayout()
+        close = QToolButton(self)
+        close.setText("\u2715")
+        close.setToolTip("Close (Esc)")
+        close.setFocusPolicy(Qt.NoFocus)
+        close.clicked.connect(self.close_tour)
+        self.close_b = close
+        top.addSpacing(24)
+        top.addWidget(GrabHandle(self), 1)
+        top.addWidget(close)
+        lay.addLayout(top)
+        self.steps = TourSteps(self)
+        self.steps.jump.connect(lambda ch: self.go(next(j for j, s in enumerate(TOUR_SLIDES)
+                                                        if s["chapter"] == TOUR_CHAPTERS[ch])))
+        lay.addWidget(self.steps)
+        self.stage = TourStage(self.kit, self)
+        lay.addWidget(self.stage)
+        text = QWidget(self)
+        text.setFixedHeight(self.TEXT_H)
+        tl = QVBoxLayout(text)
+        tl.setContentsMargins(0, 6, 0, 0)
+        tl.setSpacing(8)
+        self.title = QLabel(text)
+        self.title.setObjectName("obTitle")
+        self.line = QLabel(text)
+        self.line.setObjectName("obLine")
+        self.line.setWordWrap(True)
+        self.compare = QWidget(text)
+        cl = QHBoxLayout(self.compare)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(8)
+        self.worse = QLabel(self.compare)
+        self.worse.setObjectName("obWorse")
+        self.better = QLabel(self.compare)
+        self.better.setObjectName("obBetter")
+        cl.addWidget(self.worse)
+        cl.addWidget(self.better)
+        cl.addStretch(1)
+        self.note = QLabel(text)
+        self.note.setObjectName("obAside")
+        self.live = QWidget(text)           # the live Connect Google controls go in here
+        self.live_lay = QVBoxLayout(self.live)
+        self.live_lay.setContentsMargins(0, 2, 0, 0)
+        self._build_live()
+        tl.addWidget(self.title)
+        tl.addWidget(self.line)
+        tl.addWidget(self.compare)
+        tl.addWidget(self.note)
+        tl.addWidget(self.live, 1)
+        lay.addWidget(text)
+        foot = QHBoxLayout()
+        foot.setSpacing(6)
+        self.dont = QCheckBox("Don't open this again", self)
+        self.dont.toggled.connect(self._dont_toggled)
+        self.count = QLabel(self)
+        self.count.setObjectName("obCount")
+        foot.addWidget(self.dont)
+        foot.addStretch(1)
+        foot.addWidget(self.count)
+        foot.addSpacing(6)
+
+        def button(label, name, fn, tip):
+            b = QPushButton(label, self)
+            b.setObjectName(name)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            foot.addWidget(b)
+            return b
+        self.skip_b = button("Skip", "ghost", self.close_tour, "Close the tour (Esc)")
+        self.back_b = button("Back", "ghost", lambda: self.go(self.i - 1), "Back (Left arrow)")
+        self.next_b = button("Next", "primary", lambda: self.go(self.i + 1), "Next (Right arrow or Enter)")
+        self.done_b = button("Done", "ghost", self.close_tour, "Close the tour")
+        self.try_b = button("Try it for real", "primary", self.try_it, "A short guide on the real cloud (Enter)")
+        lay.addLayout(foot)
+        self.setFixedWidth(SCENE_W + 2 * (20 + m))
+        self.go(0, animate=False)
+        self.setFixedHeight(self.sizeHint().height())
+        self.watch_keys(*self.findChildren(QWidget))
+
+    TOUR_KEYS = (Qt.Key_Right, Qt.Key_Left, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape)
+
+    def watch_keys(self, *widgets):
+        """Buttons use the arrow keys to move focus; here they change slides wherever focus is."""
+        for w in widgets:
+            if w.focusPolicy() != Qt.NoFocus:
+                w.installEventFilter(self)
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.KeyPress and e.key() in self.TOUR_KEYS:
+            self.keyPressEvent(e)
+            return True
+        return super().eventFilter(obj, e)
+
+    def _css(self):
+        return full_style() + f"""
+            QLabel#obTitle {{ color: {C['text']}; font-size: 20px; font-weight: 700; }}
+            QLabel#obLine {{ color: {C['dim']}; font-size: 13px; }}
+            QLabel#obWorse {{ background: {C['field']}; color: {C['faint']}; font-size: 12px;
+                text-decoration: line-through; border: 1px solid {C['border']}; border-radius: 11px;
+                padding: 3px 10px; }}
+            QLabel#obBetter {{ background: {C['glimmer_bg']}; color: {C['glimmer']}; font-size: 12px;
+                font-weight: 700; border: 1px solid {C['glimmer_bg']}; border-radius: 11px; padding: 3px 10px; }}
+            QLabel#obAside {{ color: {C['dim']}; font-size: 12px; }}
+            QLabel#obCount, QLabel#obNote {{ color: {C['faint']}; font-size: 11px; }}
+            QLabel#obAsk {{ color: {C['text']}; font-size: 12px; font-weight: 600; }}
+            QLabel#obStatus {{ color: {C['dim']}; font-size: 12px; }}
+            QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
+                padding: 6px 14px; border-radius: 8px; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: #b54552; }}
+            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}"""
+
+    def _restyle(self):
+        self.setStyleSheet(self._css())
+        if self.isVisible():
+            self._refresh_look()        # the Auto colour follows the theme
+        self.update()
+
+    def _build_live(self):
+        """The Connect Google button, its status and the warning note. Built once; go() shows it on its slide."""
+        box = QWidget(self.live)
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        self.live_lay.addWidget(box)
+        r = QHBoxLayout()
+        r.setSpacing(10)
+        bl.addLayout(r)
+        self.google_b = QPushButton("Connect Google", box)
+        self.google_b.setObjectName("primary")
+        self.google_b.setCursor(Qt.PointingHandCursor)
+        self.google_b.setToolTip("Opens Google sign-in in your browser")
+        self.google_b.clicked.connect(lambda: self.calendar.connect_google())
+        self.google_status = QLabel(box)
+        self.google_status.setObjectName("obStatus")
+        self.google_status.setWordWrap(True)
+        r.addWidget(self.google_b)
+        r.addWidget(self.google_status, 1)
+        self.google_note = QLabel("Google shows a warning first because the app is new. "
+                                  "Click Advanced, then Go to Park That Thought.", box)
+        self.google_note.setObjectName("obNote")
+        self.google_note.setWordWrap(True)
+        bl.addWidget(self.google_note)
+        self.live_boxes = {"google": box}
+        if self.calendar is not None:
+            self.calendar.changed.connect(self._refresh_google)
+        self.live_lay.addStretch(1)
+
+    def _refresh_look(self):
+        """The scenes draw the real cloud: its colour, shape and outline."""
+        self.kit.update(tour_looks(self.bubble))
+
+    def _refresh_google(self):
+        cal = self.calendar
+        on = bool(cal and cal.connected)
+        self.google_b.setVisible(cal is not None and not on)
+        self.google_note.setVisible(cal is not None and not on)
+        auth = self.store.settings.get("google_calendar_auth")
+        email = auth.get("email") if isinstance(auth, dict) else None
+        if not on:
+            self.google_status.setText(cal.status if cal else "")
+        elif email:
+            self.google_status.setText(f"\u2713 Connected as {email}")
+        elif cal.feed_connected:
+            self.google_status.setText("\u2713 Connected with your calendar link")
+        else:
+            self.google_status.setText("\u2713 Already connected")
+
+    def _refresh_live(self):
+        """On a retake the live steps show what is already set."""
+        self._refresh_google()
+        self._refresh_look()
+
+    def go(self, i, animate=True):
+        self.i = i = max(0, min(len(TOUR_SLIDES) - 1, i))
+        s, last = TOUR_SLIDES[i], i == len(TOUR_SLIDES) - 1
+        self.steps.set_progress(TOUR_CHAPTERS.index(s["chapter"]), tour_share(i), animate)
+        self.stage.set_scene(s["scene"], s["secs"])
+        self.title.setText(s["title"])
+        self.line.setText(tour_text(s["line"], self.kit["hotkey"]))
+        worse, better = s["card"] or ("", "")
+        self.worse.setText(f"\u00d7  {worse}")     # Segoe UI has no \u2717
+        self.better.setText(f"\u2713  {better}")
+        self.compare.setVisible(bool(s["card"]))
+        self.note.setText(s["note"] or "")
+        self.note.setVisible(bool(s["note"]))
+        for key, box in self.live_boxes.items():
+            box.setVisible(s["live"] == key)
+        self.count.setText(f"{i + 1} / {len(TOUR_SLIDES)}")
+        self.back_b.setVisible(i > 0)
+        for b in (self.skip_b, self.next_b):
+            b.setVisible(not last)
+        for b in (self.done_b, self.try_b):
+            b.setVisible(last)
+        if self.isVisible() and not (self.focusWidget() or self).isVisible():   # focus was on a button that hid
+            (self.try_b if last else self.next_b).setFocus()
+
+    def open(self):
+        """Fresh every time: the cloud picture, the hotkey, the live steps, the saved checkbox, slide 1, centred on
+        the cloud's screen."""
+        self.kit.update(flags=tour_flags(), hotkey=self.store.settings.get("hotkey_quick", DEFAULT_HOTKEY_QUICK))
+        self._refresh_live()
+        self.dont.blockSignals(True)
+        self.dont.setChecked(not self.store.settings.get("onboarding_show", True))
+        self.dont.blockSignals(False)
+        self.go(0, animate=False)
+        g = screen_for(self, self.bubble.geometry().center()).availableGeometry()
+        self.move(g.center() - QPoint(self.width() // 2, self.height() // 2))
+        self.show()
+        apply_share_privacy(self)
+        force_foreground(self)
+        self.next_b.setFocus()
+
+    def _dont_toggled(self, on):
+        self.store.settings["onboarding_show"] = not on
+        self.store.save()
+
+    def close_tour(self):
+        self.hide()
+        self.on_close()
+
+    def try_it(self):
+        self.hide()
+        self.on_try()
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        last = self.i == len(TOUR_SLIDES) - 1
+        if k in (Qt.Key_Return, Qt.Key_Enter) and last:
+            self.try_it()
+        elif k in (Qt.Key_Right, Qt.Key_Return, Qt.Key_Enter):
+            self.go(self.i + 1)
+        elif k == Qt.Key_Left:
+            self.go(self.i - 1)
+        elif k == Qt.Key_Escape:
+            self.close_tour()
+        else:
+            super().keyPressEvent(e)
+
+    def closeEvent(self, e):            # closed from the taskbar: hide like Skip, keep the window
+        e.ignore()
+        if self.isVisible():
+            self.close_tour()
+
+
+# ---------------------------------------------------------------- hands-on guide
+class Spotlight(QWidget):
+    """A pulsing ring around what the guide wants clicked. Click-through, on top, hidden from screen share.
+    A 33 ms timer follows the target (the cloud can be dragged); the ring is steady with Windows animations off."""
+    PAD = 8
+
+    def __init__(self):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+                         | Qt.WindowTransparentForInput)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.target, self.still, self.t0 = None, False, 0.0
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self._follow)
+
+    def follow(self, target):
+        """target() returns the thing's rect on screen, or None while it isn't showing (the ring waits)."""
+        self.target, self.still, self.t0 = target, reduced_motion(), time.monotonic()
+        self.timer.stop()
+        self._follow()
+        if target:
+            self.timer.start()
+
+    def stop(self):
+        self.target = None
+        self.timer.stop()
+        self.hide()
+
+    def _follow(self):
+        r = self.target() if self.target else None
+        if r is None or r.isEmpty():
+            self.hide()
+            return
+        g = r.adjusted(-self.PAD, -self.PAD, self.PAD, self.PAD)
+        if g != self.geometry():
+            self.setGeometry(g)
+        if not self.isVisible():
+            self.show()
+            apply_share_privacy(self)
+        self.update()
+
+    def pulse(self):
+        """0..1, one soft beat a second; a steady 1 with Windows animations off."""
+        return 1.0 if self.still else 0.5 + 0.5 * math.cos((time.monotonic() - self.t0) * 2 * math.pi)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k = self.pulse()
+        color = QColor(C["accent"])
+        color.setAlphaF(0.45 + 0.55 * k)
+        w = 2.5 + 1.5 * k
+        r = QRectF(self.rect()).adjusted(w, w, -w, -w)
+        p.setPen(QPen(color, w))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(r, min(r.width(), r.height()) / 2, min(r.width(), r.height()) / 2)
+
+
+def _screen_rect(w):
+    """A widget's rect on screen, or None while it isn't showing."""
+    return QRect(w.mapToGlobal(QPoint(0, 0)), w.size()) if w is not None and w.isVisible() else None
+
+
+def coach_steps(store, bubble, panel, badge, calendar, hotkey):
+    """The hands-on guide's cards, in order. Each: key, text, emoji, target() (a rect on screen or None),
+    watch() (called as the card shows; returns its done() test, or None for a card that waits for a chip) and
+    chips. The meeting bar steps only come while the bar shows: it hides with no calendar or when turned off."""
+    st = store.settings
+    chips = [("Skip", "next"), ("End tour", "end")]
+
+    def cloud():
+        return bubble.geometry() if bubble.isVisible() else None
+
+    def notes():
+        return sum(len(group["tasks"]) for group in store.lists)
+
+    def more_notes():
+        n = notes()
+        return lambda: notes() > n
+
+    def moved():
+        p = bubble.pos()
+        return lambda: math.hypot(bubble.x() - p.x(), bubble.y() - p.y()) > 20
+
+    ways = ([f"Press {hotkey}"] if hotkey else []) + (
+        ["scribble the mouse up and down near me"] if st.get("gesture", True) and st.get("gesture_quick", True) else [])
+    how = " or ".join(ways) + ", type anything, press Enter." if ways else "Click me, type it in the list, press Enter."
+    how = how[0].upper() + how[1:]
+    first = "Park your first thought." if not notes() else "Park a thought."
+    steps = [
+        dict(key="park", emoji="\U0001F4AD", text=f"{first} {how}", target=cloud, watch=more_notes, chips=chips),
+        dict(key="drag", emoji="\u270B", text="Drag me anywhere. I remember the spot.", target=cloud, watch=moved,
+             chips=chips),
+        dict(key="list", emoji="\U0001F5C2\uFE0F",
+             text="Click me to open your list. Focus rounds start there. Right-click me for settings.",
+             target=cloud, watch=lambda: panel.isVisible, chips=chips)]
+    if badge is not None and badge.isVisible():
+        steps += [
+            dict(key="bar", emoji="\U0001F4C5", text="This bar shows your next meeting. Click it to see the next "
+                 "three days.", target=lambda: _screen_rect(badge), watch=lambda: badge.agenda.isVisible, chips=chips),
+            dict(key="camera", emoji="\U0001F4F7", text="Click the camera to check your face and mic before a call.",
+                 target=lambda: _screen_rect(badge.mirror_btn),
+                 watch=lambda: lambda: badge.mirror is not None and badge.mirror.isVisible(), chips=chips),
+            dict(key="timelapse", emoji="\U0001F39E\uFE0F",
+                 text="Daily photo saves today's picture. Timelapse plays them all back. Click Timelapse.",
+                 target=lambda: _screen_rect(badge.mirror.timelapse_btn) if badge.mirror else None,
+                 watch=lambda: lambda: bool(badge.mirror and badge.mirror.timelapse
+                                            and badge.mirror.timelapse.isVisible()), chips=chips)]
+    else:
+        text = ("Turn on the meeting bar in Settings > Calendar to try the camera check and timelapse."
+                if calendar is not None and calendar.connected else
+                "Connect Google in Settings > Calendar to get the meeting bar, camera check and timelapse.")
+        steps.append(dict(key="settings", emoji="\u2699\uFE0F", text=text, target=None, watch=None,
+                          chips=[("Open Settings", "settings"), ("Not now", "next"), ("End tour", "end")]))
+    steps.append(dict(key="done", emoji="\U0001F389", text="You're all set. Right-click me any time for more.",
+                      target=cloud, watch=None, chips=[("Done", "done")]))
+    return steps
+
+
+class Coach(QObject):
+    """The hands-on guide after the picture tour ("Try it for real"): one card at a time from the real cloud, a
+    ring on what to click, and the next card once the user has done it (checked every 250 ms). Cards wait 10 min.
+    Skip moves on; End tour, Esc or the wait running out end it, with no confetti. It never opens the camera."""
+    WAIT_MS = 10 * 60 * 1000
+
+    def __init__(self, store, bubble, panel, badge, calendar, open_settings, confetti, on_end=lambda finished: None):
+        super().__init__()
+        self.store, self.bubble, self.panel, self.badge, self.calendar = store, bubble, panel, badge, calendar
+        self.open_settings, self.confetti, self.on_end = open_settings, confetti, on_end
+        self.card = SpeechBubble()              # its own card, not the nudges' one
+        self.card.closed.connect(self._answer)
+        self.spot = Spotlight()
+        self.poll = QTimer(self)
+        self.poll.setInterval(250)
+        self.poll.timeout.connect(self._check)
+        self.steps, self.i, self.done, self.running = [], -1, None, False
+
+    def start(self):
+        hotkey = self.store.settings.get("hotkey_quick", DEFAULT_HOTKEY_QUICK)
+        self.steps = coach_steps(self.store, self.bubble, self.panel, self.badge, self.calendar, hotkey)
+        self.i, self.running = -1, True
+        self._next()
+
+    def stop(self):
+        if self.running:
+            self._end(False)
+
+    def _next(self):
+        if not self.running:
+            return
+        self.i += 1
+        if self.i >= len(self.steps):
+            return self._end(True)
+        s = self.steps[self.i]
+        self.done = s["watch"]() if s["watch"] else None      # the baseline (notes, cloud spot) is taken now
+        self.bubble.hop()
+        self.card.say(self.bubble.geometry(), s["text"], s["chips"], timeout_ms=self.WAIT_MS, emoji=s["emoji"])
+        if self.done is None:
+            self.card.take_keys()               # info card: 1-9 and Esc work. Action cards leave focus alone.
+        self.spot.follow(s["target"])
+        self.poll.start() if self.done else self.poll.stop()
+
+    def _check(self):
+        if self.done is not None and self.done():
+            self.done = None
+            self.poll.stop()
+            self.card._finish("next")
+
+    def _answer(self, key):
+        if not self.running:
+            return
+        self.poll.stop()
+        self.done = None
+        if key == "settings":
+            self.open_settings("calendar")
+        if key in ("next", "settings"):
+            QTimer.singleShot(0, self._next)
+        else:
+            self._end(key == "done")            # Done on the last card, or End tour / Esc / timeout
+
+    def _end(self, finished):
+        self.running, self.done = False, None
+        self.poll.stop()
+        self.spot.stop()
+        self.card.timer.stop()
+        self.card.hide()
+        if finished:
+            self.confetti.burst(self.bubble.geometry().center(), ["You're all set", "Right-click the cloud for more."])
+        self.on_end(finished)
+
+
 def make_settings_style():
     return f"""
 QWidget#settingsRoot {{ background: {C['bg']}; }}
@@ -11919,10 +13830,13 @@ def calendar_json(url, token=None, form=None, body=None, method=None):
 
 def calendar_access(auth):
     """A fresh access token from the saved, encrypted refresh token."""
-    return calendar_json(GOOGLE_TOKEN_URL, form={
-        "client_id": auth["client_id"], "client_secret": auth["client_secret"],
-        "refresh_token": calendar_token_blob(auth["refresh_token"], encrypt=False),
-        "grant_type": "refresh_token"})["access_token"]
+    try:
+        form = {"client_id": auth["client_id"], "client_secret": auth["client_secret"],
+                "refresh_token": calendar_token_blob(auth["refresh_token"], encrypt=False),
+                "grant_type": "refresh_token"}
+    except (KeyError, TypeError, ValueError):     # a missing part or a token that won't decode
+        raise RuntimeError("The saved Google login is damaged. Reconnect in Settings.") from None
+    return calendar_json(GOOGLE_TOKEN_URL, form=form)["access_token"]
 
 
 def id_token_email(id_token):
@@ -13070,116 +14984,101 @@ class MeetingGlint(QWidget):
             p.fillPath(path, gradient)
 
 
-def meeting_cue_copy(stage, minutes, stamp):
-    """Plain facts. The heading and time line already say when, so most stages add nothing."""
-    return {"started": "It has started.", "halfway": "{minutes} min left."}.get(stage, "").format(minutes=minutes)
+def meeting_note_line(stage, event, now):
+    """The note's small first line: when, in plain words."""
+    if stage == "finished":
+        return f"Ended {clock_text(event['end'])}"
+    if stage == "started":
+        return f"Started · ends {clock_text(event['end'])}"
+    if stage == "halfway":
+        left = max(1, math.ceil((event["end"] - now).total_seconds() / 60))
+        return f"{left} min left · ends {clock_text(event['end'])}"
+    left = max(1, math.ceil((event["start"] - now).total_seconds() / 60))
+    return f"In {left} min · {clock_text(event['start'])}"
 
 
 class MeetingNotice(QWidget):
-    """A compact, persistent cue beside the cloud. Later stages update it in place."""
+    """A small two-line note by the cloud: fades in, stays HOLD_MS, fades out on its own. No buttons, no keys,
+    clicks pass through, never takes focus. A later stage of the same event updates it in place."""
     dismissed = Signal()
+    HOLD_MS = 9000          # about double a peek: two lines to read, noticed from the corner of the eye
+    WIDTH = 240
 
     def __init__(self, bubble):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.bubble = bubble
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.NoFocus)
         self.current_stamp = None
         self.rank = -1
-        self.suspended = False
         self.tail_right = True
         self.accent = QColor(C["accent"])
         self.stage = "lead_calm"
-        self.url = ""
-        self.arrive = QPropertyAnimation(self, b"pos", self)
-        self.arrive.setDuration(220)
-        self.arrive.setEasingCurve(QEasingCurve.OutCubic)
+        self._title = ""
+        self.fade_in = QPropertyAnimation(self, b"windowOpacity", self)
+        self.fade_in.setDuration(300)
+        self.fade_in.setEndValue(1.0)
+        self.fade_out = QPropertyAnimation(self, b"windowOpacity", self)
+        self.fade_out.setDuration(800)
+        self.fade_out.setEndValue(0.0)
+        self.fade_out.finished.connect(self.dismiss)
+        self.hold = QTimer(self)
+        self.hold.setSingleShot(True)
+        self.hold.timeout.connect(self.fade_out.start)
         self.setStyleSheet(STYLE + f"""
-            QLabel#meetingCueHeading {{ color: {C['accent_text']}; font-size: 11px; font-weight: 700;
-                letter-spacing: 1px; }}
-            QLabel#meetingCueTitle {{ color: {C['text']}; font-size: 14px; font-weight: 700; }}
-            QLabel#meetingCueInfo {{ color: {C['dim']}; font-size: 11px; }}
-            QLabel#meetingCueBody {{ color: {C['text']}; font-size: 12px; }}
-            QPushButton#meetingCueDone {{ background: {C['accent']}; color: white; border: none;
-                border-radius: 7px; padding: 5px 11px; font-weight: 700; }}
-            QPushButton#meetingCueOpen {{ background: {C['surface']}; color: {C['text']};
-                border: 1px solid {C['border']}; border-radius: 7px; padding: 5px 11px; }}
+            QLabel#meetingCueHeading {{ color: {C['accent_text']}; font-size: 11px; font-weight: 600; }}
+            QLabel#meetingCueTitle {{ color: {C['text']}; font-size: 13px; font-weight: 600; }}
         """)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 15, 23, 13)
-        lay.setSpacing(5)
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        self.face = EmojiFace(26)
-        header.addWidget(self.face, 0, Qt.AlignTop)
-        heading_text = QVBoxLayout()
-        heading_text.setSpacing(1)
+        lay = QHBoxLayout(self)
+        lay.setSpacing(6)
+        self.face = EmojiFace(18)
+        lay.addWidget(self.face, 0, Qt.AlignVCenter)
+        lines = QVBoxLayout()
+        lines.setSpacing(0)
         self.heading = QLabel(self)
         self.heading.setObjectName("meetingCueHeading")
         self.heading.setTextFormat(Qt.PlainText)
-        heading_text.addWidget(self.heading)
+        lines.addWidget(self.heading)
         self.event_title = QLabel(self)
         self.event_title.setObjectName("meetingCueTitle")
         self.event_title.setTextFormat(Qt.PlainText)
-        self.event_title.setWordWrap(True)
-        heading_text.addWidget(self.event_title)
-        header.addLayout(heading_text, 1)
-        lay.addLayout(header)
-        self.info = QLabel(self)
-        self.info.setObjectName("meetingCueInfo")
-        self.info.setTextFormat(Qt.PlainText)
-        self.info.setWordWrap(True)
-        lay.addWidget(self.info)
-        self.body = QLabel(self)
-        self.body.setObjectName("meetingCueBody")
-        self.body.setTextFormat(Qt.PlainText)
-        self.body.setWordWrap(True)
-        lay.addWidget(self.body)
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        self.open_button = QPushButton("Join", self)
-        self.open_button.setObjectName("meetingCueOpen")
-        self.open_button.clicked.connect(self.open_event)
-        buttons.addWidget(self.open_button)
-        self.done_button = QPushButton("Got it", self)
-        self.done_button.setObjectName("meetingCueDone")
-        self.done_button.clicked.connect(self.dismiss)
-        buttons.addWidget(self.done_button)
-        lay.addLayout(buttons)
+        lines.addWidget(self.event_title)
+        lay.addLayout(lines, 1)
 
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = (QRectF(self.rect()).adjusted(1, 1, -10, -1) if self.tail_right else
-             QRectF(self.rect()).adjusted(10, 1, -1, -1))
+        r = (QRectF(self.rect()).adjusted(1, 1, -8, -1) if self.tail_right else
+             QRectF(self.rect()).adjusted(8, 1, -1, -1))
         path = QPainterPath()
-        path.addRoundedRect(r, 15, 15)
-        cy = min(r.bottom() - 20, max(r.top() + 20, getattr(self, "_tail_y", r.center().y())))
+        path.addRoundedRect(r, 12, 12)
+        cy = min(r.bottom() - 14, max(r.top() + 14, getattr(self, "_tail_y", r.center().y())))
         tail = QPainterPath()
         if self.tail_right:
-            tail.moveTo(r.right() - 1, cy - 9)
-            tail.lineTo(r.right() + 9, cy)
-            tail.lineTo(r.right() - 1, cy + 9)
+            tail.moveTo(r.right() - 1, cy - 7)
+            tail.lineTo(r.right() + 7, cy)
+            tail.lineTo(r.right() - 1, cy + 7)
         else:
-            tail.moveTo(r.left() + 1, cy - 9)
-            tail.lineTo(r.left() - 9, cy)
-            tail.lineTo(r.left() + 1, cy + 9)
+            tail.moveTo(r.left() + 1, cy - 7)
+            tail.lineTo(r.left() - 7, cy)
+            tail.lineTo(r.left() + 1, cy + 7)
+        edge = QColor(self.accent)
+        edge.setAlpha(110)
         p.setBrush(QColor(C["surface_hi"]))
-        p.setPen(QPen(self.accent, 1.6))
+        p.setPen(QPen(edge, 1))
         p.drawPath(path.united(tail))
-        p.setPen(Qt.NoPen)
-        p.setBrush(self.accent)
-        p.drawRoundedRect(QRectF(r.left() + 1, r.top() + 15, 3, r.height() - 30), 1.5, 1.5)
 
     def place(self):
         circle = self.bubble.geometry()
         area = screen_for(self, circle.center()).availableGeometry()
-        desired = 300 if self.stage == "finished" else 318 if self.stage in ("started", "halfway") else 336
-        self.setFixedWidth(min(desired, max(240, area.width() - 24)))
+        self.setFixedWidth(min(self.WIDTH, max(180, area.width() - 24)))
         self.tail_right = circle.center().x() > area.center().x()
-        self.layout().setContentsMargins(18 if self.tail_right else 23, 15,
-                                         23 if self.tail_right else 18, 13)
+        self.layout().setContentsMargins(11 if self.tail_right else 19, 7, 19 if self.tail_right else 11, 7)
+        room = self.width() - 30 - self.face.width() - self.layout().spacing()
+        self.event_title.ensurePolished()           # the 13 px style font, not the default, decides the cut
+        self.event_title.setText(self.event_title.fontMetrics().elidedText(self._title, Qt.ElideRight, room))
         self.adjustSize()
         x = circle.left() - self.width() - 4 if self.tail_right else circle.right() + 4
         y = circle.center().y() - self.height() // 2
@@ -13189,93 +15088,52 @@ class MeetingNotice(QWidget):
         self.move(x, y)
         self.update()
 
-    def show_notice(self, stamp, rank, stage, heading, event, body, emoji, color):
-        fresh_stage = stamp != self.current_stamp or rank != self.rank
-        self.current_stamp, self.rank = stamp, rank
-        self.stage = stage
-        self.suspended = False
+    def show_notice(self, stamp, rank, stage, line, event, emoji, color):
+        fresh = not self.isVisible()
+        self.current_stamp, self.rank, self.stage = stamp, rank, stage
         self.accent = QColor(color)
-        self.heading.setText(heading)
         if theme_dark():
             label_color = self.accent.lighter(145).name() if self.accent.lightness() < 130 else color
         else:   # warm tones like amber wash out on white: take them darker
             label_color = self.accent.darker(165).name() if self.accent.lightness() > 110 else color
         self.heading.setStyleSheet(f"color: {label_color};")
-        self.event_title.setText(event.get("title") or "Meeting")
-        start = event["start"].strftime("%-I:%M %p") if os.name != "nt" else event["start"].strftime("%#I:%M %p")
-        end = event["end"].strftime("%-I:%M %p") if os.name != "nt" else event["end"].strftime("%#I:%M %p")
-        when = (f"Ended {end}" if stage == "finished" else
-                f"Ends {end}" if stage in ("started", "halfway") else f"{start} to {end}")
-        self.info.setText(when + (f" · {event['calendar_name']}" if event.get("calendar_name") else ""))
-        self.body.setText(body)
-        self.body.setVisible(bool(body))
+        self.heading.setText(line)
+        self._title = event.get("title") or "Meeting"
         self.face.set(emoji, "tilt" if stage == "finished" else "bounce")
-        self.url = event.get("url") or ""
-        self.open_button.setVisible(bool(self.url) and stage != "finished")
-        self.open_button.setText("Join" if event.get("join") else "Open")
-        button_text = "white" if self.accent.lightness() < 130 else "#18202b"
-        self.done_button.setStyleSheet(f"background: {color}; color: {button_text};")
         self.place()
-        destination = self.pos()
-        self.arrive.stop()
-        if fresh_stage:
-            self.move(destination + QPoint(16 if self.tail_right else -16, 0))
-        self.show()
+        self.fade_out.stop()
+        if fresh:
+            self.fade_in.stop()
+            self.setWindowOpacity(0.0)
+            self.show()
+            apply_share_privacy(self)
+            self.fade_in.setStartValue(0.0)
+            self.fade_in.start()
+        else:                   # a later stage while it's still out: update in place, hold again
+            self.setWindowOpacity(1.0)
         self.raise_()
-        apply_share_privacy(self)
-        if fresh_stage:
-            self.arrive.setStartValue(self.pos())
-            self.arrive.setEndValue(destination)
-            self.arrive.start()
+        self.hold.start(self.fade_in.duration() + self.HOLD_MS)
 
     def refresh_time(self, now, event):
-        """Keep a persistent card's countdown truthful between stage changes."""
-        if self.stage.startswith("lead_"):
-            left = max(1, math.ceil((event["start"] - now).total_seconds() / 60))
-            self.heading.setText(f"IN {left} MIN")
-        elif self.stage == "halfway":
-            left = max(1, math.ceil((event["end"] - now).total_seconds() / 60))
-            self.body.setText(meeting_cue_copy("halfway", left, self.current_stamp))
+        self.heading.setText(meeting_note_line(self.stage, event, now))
 
     def suspend(self):
-        if self.current_stamp and self.isVisible():
-            self.suspended = True
-            self.hide()
-
-    def resume(self):
-        if self.current_stamp and self.suspended:
-            self.suspended = False
-            self.place()
-            self.show()
-            self.raise_()
-            apply_share_privacy(self)
+        """Full screen or a hidden cloud: the note goes and isn't shown later (the bar glint still warns)."""
+        if self.current_stamp:
+            self.clear()
 
     def dismiss(self):
         self.clear()
         self.dismissed.emit()
 
     def clear(self):
-        self.arrive.stop()
+        self.hold.stop()
+        self.fade_in.stop()
+        self.fade_out.stop()
         self.current_stamp = None
         self.rank = -1
-        self.suspended = False
         self.hide()
-
-    def open_event(self):
-        if self.url:
-            QDesktopServices.openUrl(QUrl(self.url))
-        self.dismiss()
-
-    def take_keys(self):
-        force_foreground(self)
-        self.done_button.setFocus()
-
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self.dismiss()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
+        self.setWindowOpacity(1.0)
 
 
 def event_color(event):
@@ -15120,6 +16978,15 @@ class SnapToast(QWidget):
         p.end()
 
 
+def best_camera_format(formats):
+    """The sharpest smooth camera mode: 24 fps or more, most pixels up to 1080p. Qt's default is often 640x480.
+    ponytail: capped at 1080p since every frame becomes an image on this thread; raise the cap if that's cheap."""
+    def rank(f):
+        area = f.resolution().width() * f.resolution().height()
+        return f.maxFrameRate() >= 24, min(area, 1920 * 1080), -area, f.maxFrameRate()
+    return max(formats, key=rank, default=None)
+
+
 def rounded_frame(image, size, dpr=1.0, radius=12, fill=True, flip=False):
     """The image in a rounded box of this size: filling it (cut at the long sides) or fitted (dark bands), flipped
     if asked. Masked, not clipped, so the corners are smooth."""
@@ -15133,6 +17000,9 @@ def rounded_frame(image, size, dpr=1.0, radius=12, fill=True, flip=False):
         p.translate(w, 0)
         p.scale(-1, 1)
     shown = image.size().scaled(size, Qt.KeepAspectRatioByExpanding if fill else Qt.KeepAspectRatio)
+    # Scale once to screen pixels with area averaging: drawing a big frame straight in samples it (jagged, soft).
+    image = image.scaled(max(1, round(shown.width() * dpr)), max(1, round(shown.height() * dpr)),
+                         Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
     p.drawImage(QRectF((w - shown.width()) / 2, (h - shown.height()) / 2, shown.width(), shown.height()), image)
     p.end()
     out = QPixmap(inner.size())
@@ -15166,6 +17036,10 @@ QToolButton#mirrorDevice {{ background: rgba(20, 20, 22, 170); border: 1px solid
     border-radius: 20px; padding: 0; min-width: 0; min-height: 0; }}
 QToolButton#mirrorDevice:hover {{ background: rgba(64, 64, 70, 220); }}
 QToolButton#mirrorDevice:!checked {{ background: {C['urgent']}; border-color: {C['urgent']}; }}
+QToolButton#mirrorPick {{ color: white; background: rgba(20, 20, 22, 170); border: 1px solid rgba(255, 255, 255, 46);
+    border-radius: 10px; padding: 0; min-width: 0; min-height: 0; font-size: 12px; }}
+QToolButton#mirrorPick:hover, QToolButton#mirrorPick:focus {{ background: rgba(64, 64, 70, 220); }}
+QToolButton#mirrorPick::menu-indicator {{ image: none; width: 0; }}
 QToolButton#mirrorTool {{ color: {C['dim']}; font-size: 11px; border-radius: 8px; padding: 5px 2px 4px 2px;
     min-width: 0; min-height: 0; }}
 QToolButton#mirrorTool:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
@@ -15237,8 +17111,8 @@ class MirrorWindow(QWidget):
     preview (flipped, like a mirror) with round camera and mic switches on it, a mic meter in dB, and Record 5 s
     to hear yourself back. Any day: the round shutter saves a daily photo, an instant-camera print with the date
     and time, to parking_lot_data/snaps; the face guide (preview only) helps frame each day the same for a
-    timelapse. The window takes the camera's shape, so the preview fills it. Default devices only; all stop when
-    it hides. The timelapse takes its place while open. Esc closes, T opens the timelapse."""
+    timelapse. The window takes the camera's shape, so the preview fills it. The ▾ next to each switch picks the
+    camera, mic or speaker (the system default until you pick); all stop when it hides. The timelapse takes its place while open. Esc closes, T opens the timelapse."""
     RECORD_SECONDS = 5
 
     def __init__(self, store=None):
@@ -15294,7 +17168,9 @@ class MirrorWindow(QWidget):
         v.addWidget(self.view, 1)
         self.toast = SnapToast(self.view)
         self.camera_btn = self._device()
+        self.camera_pick = self._picker("camera", "Choose the camera")
         self.mic_btn = self._device()
+        self.mic_pick = self._picker("mic", "Choose the mic and speaker")
         self.view.installEventFilter(self)          # keeps the two switches at the preview's bottom centre
         card = QFrame(self)
         card.setObjectName("mirrorCard")
@@ -15380,6 +17256,61 @@ class MirrorWindow(QWidget):
         b.toggled.connect(self._sync)
         return b
 
+    def _picker(self, kind, tip):
+        """The ▾ beside a switch: a menu of devices, rebuilt each time it opens (a headset may have just been
+        plugged in). Tab reaches it; Space opens it."""
+        b = QToolButton(self.view)
+        b.setObjectName("mirrorPick")
+        b.setText("▾")
+        b.setToolTip(tip)
+        b.setAccessibleName(tip)
+        b.setFixedSize(20, 28)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(b)
+        menu.aboutToShow.connect(lambda: self._fill_devices(menu, kind))
+        b.setMenu(menu)
+        return b
+
+    def _device_lists(self, kind):
+        """(section title, settings key, devices, system default) for the camera menu or the mic menu."""
+        from PySide6.QtMultimedia import QMediaDevices
+        if kind == "camera":
+            return [("Camera", "mirror_camera", QMediaDevices.videoInputs(), QMediaDevices.defaultVideoInput())]
+        return [("Microphone", "mirror_mic", QMediaDevices.audioInputs(), QMediaDevices.defaultAudioInput()),
+                ("Speaker", "mirror_speaker", QMediaDevices.audioOutputs(), QMediaDevices.defaultAudioOutput())]
+
+    def _chosen(self, key, devices, default):
+        """The device saved under this key, or the system default (also when the saved one is unplugged)."""
+        want = self._settings().get(key)
+        return next((d for d in devices if want and bytes(d.id()).hex() == want), default)
+
+    def _fill_devices(self, menu, kind):
+        menu.clear()
+        for title, key, devices, default in self._device_lists(kind):
+            menu.addSection(title)
+            chosen = self._chosen(key, devices, default)
+            if not devices:
+                menu.addAction("None found").setEnabled(False)
+            for d in devices:
+                ident = bytes(d.id()).hex()
+                a = menu.addAction(d.description())
+                a.setCheckable(True)
+                a.setChecked(not chosen.isNull() and ident == bytes(chosen.id()).hex())
+                a.triggered.connect(lambda _=False, k=key, i=ident: self._choose(k, i))
+
+    def _choose(self, key, ident):
+        """Save the pick and restart that device on it."""
+        self._save(key, ident)
+        if key == "mirror_camera" and self.camera:
+            self._stop_camera()
+        elif key == "mirror_mic" and self.audio:
+            self._stop_mic()
+        elif key == "mirror_speaker" and self.player:
+            self.play_back()
+            return
+        self._sync()
+
     def _pill(self, parent, kind, color, text, longest, tip):
         """A rounded button with an icon, as wide as its longest text, so a countdown never moves the row."""
         b = QToolButton(parent)
@@ -15418,9 +17349,11 @@ class MirrorWindow(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self.view and event.type() == QEvent.Resize:
-            x, y = (self.view.width() - 92) // 2, self.view.height() - 52
+            x, y = (self.view.width() - 132) // 2, self.view.height() - 52
             self.camera_btn.move(x, y)
-            self.mic_btn.move(x + 52, y)
+            self.camera_pick.move(x + 42, y + 6)
+            self.mic_btn.move(x + 70, y)
+            self.mic_pick.move(x + 112, y + 6)
         return super().eventFilter(obj, event)
 
     def _settings(self):
@@ -15474,12 +17407,15 @@ class MirrorWindow(QWidget):
 
     def _start_camera(self):
         from PySide6.QtMultimedia import QCamera, QMediaCaptureSession, QMediaDevices, QVideoSink
-        device = QMediaDevices.defaultVideoInput()
+        device = self._chosen("mirror_camera", QMediaDevices.videoInputs(), QMediaDevices.defaultVideoInput())
         if device.isNull():
             self.view.setText("No camera found")
             return
         self.view.setText("Starting camera...")
         self.camera = QCamera(device, self)
+        best = best_camera_format(device.videoFormats())
+        if best is not None:
+            self.camera.setCameraFormat(best)
         self.sink = QVideoSink(self)
         self.session = QMediaCaptureSession(self)
         self.session.setCamera(self.camera)
@@ -15519,7 +17455,7 @@ class MirrorWindow(QWidget):
 
     def _start_mic(self):
         from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
-        device = QMediaDevices.defaultAudioInput()
+        device = self._chosen("mirror_mic", QMediaDevices.audioInputs(), QMediaDevices.defaultAudioInput())
         if device.isNull():
             self.status.setText("No mic found")
             return
@@ -15579,7 +17515,7 @@ class MirrorWindow(QWidget):
     def _make_sink(self):
         """A speaker sink in the mic's format, or None with the reason in the status line."""
         from PySide6.QtMultimedia import QAudioSink, QMediaDevices
-        out = QMediaDevices.defaultAudioOutput()
+        out = self._chosen("mirror_speaker", QMediaDevices.audioOutputs(), QMediaDevices.defaultAudioOutput())
         if out.isNull():
             self.status.setText("No speaker found")
             return None
@@ -16407,6 +18343,7 @@ class MeetingBadge(QWidget):
         self.current_event = None
         self.fullscreen_suppressed = False
         self.open_settings = lambda: None
+        self.restart = None                # set by main(): the menu's fail-safe Restart / update
         self._ready = False
         self._drag_from = None
         self._drag_start = None
@@ -16420,6 +18357,7 @@ class MeetingBadge(QWidget):
         self.setAttribute(Qt.WA_AlwaysShowToolTips)     # the bar is never the active window; tooltips anyway
         self.setProperty("keep_tips", True)             # and past the first week (see TipGate)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocus()                     # the bar itself has the focus when it's activated, not its first button
         self.setMinimumSize(*meeting_bar_minimum(calendar.store.settings))
         self.resize(284, 62)
         self._resize_edge = ""
@@ -16487,6 +18425,7 @@ class MeetingBadge(QWidget):
         row.addLayout(buttons)
         for b in (self.join_btn, self.mirror_btn, self.add_btn):
             b.installEventFilter(self)          # on a button, the event side's light goes out
+            b.setFocusPolicy(Qt.TabFocus)       # a click doesn't leave a focus ring; Tab does
         self.mirror = None
         self.card = None                    # the event card shown while hovering the title
         self.hint = HintBubble()            # our own hover hint: Qt's tooltip never shows for this bar on Windows
@@ -16931,6 +18870,9 @@ class MeetingBadge(QWidget):
         menu.addAction("Float above taskbar" if self.placement == "taskbar" else "Place on taskbar",
                        lambda: self.set_placement("floating" if self.placement == "taskbar" else "taskbar"))
         menu.addAction("Reset bar position", self.reset_position)
+        if self.restart:
+            menu.addSeparator()
+            menu.addAction("Restart / update", self.restart)
         menu.exec(event.globalPos())
 
     def open_event(self):
@@ -17020,7 +18962,6 @@ class MeetingBadge(QWidget):
         if self.fullscreen_suppressed or not self.bubble.isVisible():
             self.notice.suspend()
             return
-        self.notice.resume()
         if self.notice.isVisible():
             self.notice.place()
         settings = self.calendar.store.settings
@@ -17055,31 +18996,29 @@ class MeetingBadge(QWidget):
                         stage, emoji, tone = "lead_near", "⏳", "#f3c16e"
                     else:
                         stage, emoji, tone = "lead_calm", "🗓️", C["accent"]
-                    heading = f"IN {left} MIN"
-                    candidates.append((1000 - min(due), event["start"], stamp, pending, stage, heading,
-                                       event, meeting_cue_copy(stage, left, stamp), emoji, tone))
+                    candidates.append((1000 - min(due), event["start"], stamp, pending, stage,
+                                       meeting_note_line(stage, event, now), event, emoji, tone))
             during = settings.get("calendar_cues_during", False)
             if during and 0 <= -start_s < 120 and end_s > 0:
                 start_key = hashlib.sha256(f"{stamp}|start".encode()).hexdigest()[:20]
                 if start_key not in sent_set:
-                    candidates.append((1000, event["start"], stamp, [start_key], "started", "STARTED", event,
-                                       meeting_cue_copy("started", 0, stamp), "🤫", "#ff9b69"))
+                    candidates.append((1000, event["start"], stamp, [start_key], "started",
+                                       meeting_note_line("started", event, now), event, "🤫", "#ff9b69"))
             midpoint = event["start"] + (event["end"] - event["start"]) / 2
             half_s = (now - midpoint).total_seconds()
             if during and 0 <= half_s < 120 and end_s > 0:
                 half_key = hashlib.sha256(f"{stamp}|half".encode()).hexdigest()[:20]
                 if half_key not in sent_set:
-                    left = max(1, math.ceil(end_s / 60))
                     prior = hashlib.sha256(f"{stamp}|start".encode()).hexdigest()[:20]
-                    candidates.append((1100, event["start"], stamp, [prior, half_key], "halfway", "HALFWAY", event,
-                                       meeting_cue_copy("halfway", left, stamp), "🕒", "#78c9d6"))
+                    candidates.append((1100, event["start"], stamp, [prior, half_key], "halfway",
+                                       meeting_note_line("halfway", event, now), event, "🕒", "#78c9d6"))
             if 0 <= -end_s < 180:
                 finish_key = hashlib.sha256(f"{stamp}|finish".encode()).hexdigest()[:20]
                 if finish_key not in sent_set:
                     prior = [hashlib.sha256(f"{stamp}|{stage}".encode()).hexdigest()[:20]
                              for stage in ("start", "half")]
-                    candidates.append((1200, event["start"], stamp, prior + [finish_key], "finished", "ENDED", event,
-                                       meeting_cue_copy("finished", 0, stamp), "🌤️", "#8bd3a5"))
+                    candidates.append((1200, event["start"], stamp, prior + [finish_key], "finished",
+                                       meeting_note_line("finished", event, now), event, "🌤️", "#8bd3a5"))
         if not candidates:
             return
         current = self.notice.current_stamp
@@ -17090,17 +19029,17 @@ class MeetingBadge(QWidget):
             choice = max(newer, key=lambda c: (c[0], -c[1].timestamp()))
         else:
             choice = max(candidates, key=lambda c: (c[0], -c[1].timestamp()))
-        rank, _start, stamp, keys, stage, heading, event, body, emoji, tone = choice
+        rank, _start, stamp, keys, stage, line, event, emoji, tone = choice
         sent.extend(keys)
         settings["calendar_notice_sent"] = list(dict.fromkeys(sent))[-400:]
         self.calendar.store.save()
         self.bubble.hop()
-        self.notice.show_notice(stamp, rank, stage, heading, event, body, emoji, tone)
+        self.notice.show_notice(stamp, rank, stage, line, event, emoji, tone)
 
     def update_meeting(self):
         if not self.wants_visible():
             self.glint.set_active(False)
-            self.notice.suspend() if self.fullscreen_suppressed else self.notice.clear()
+            self.notice.clear()
             self.agenda.hide()
             self.hide()
             return
@@ -17558,9 +19497,9 @@ class SettingsWindow(QWidget):
                 meeting_bar.update_meeting()
         for spin in alert_spins:
             spin.valueChanged.connect(save_alerts)
-        self._row(bar_group, "Heads-ups", "A meeting card stays by the cloud until you press Got it or Esc. "
-                  "Set a slot to Off to skip it.", alert_box)
-        self._toggle(bar_group, "Cards during meetings", "Also show a card when a meeting starts and at halfway.",
+        self._row(bar_group, "Heads-ups", "A short note by the cloud, gone on its own "
+                  "after a few seconds. Set a slot to Off to skip it.", alert_box)
+        self._toggle(bar_group, "Notes during meetings", "Also a note when a meeting starts and at halfway.",
                      "calendar_cues_during", False)
         start_hour = QComboBox()
         start_hour.addItem("Around now", -1)
@@ -17678,8 +19617,7 @@ class SettingsWindow(QWidget):
         rl.setContentsMargins(0, 6, 0, 6)
         rl.setSpacing(4)
         grp = QButtonGroup(roww)
-        looks = [("auto", ("Auto: white on dark, midnight on light", "#ffffff"))] + list(CIRCLE_COLORS.items())
-        for k, (label, body, *_rest) in looks:
+        for k, (label, body, *_rest) in CIRCLE_LOOKS:
             sw = Swatch(body, label, roww, half=CIRCLE_COLORS["midnight"][1] if k == "auto" else None)
             sw.setChecked(k == b.color_key)
             grp.addButton(sw)
@@ -17714,8 +19652,8 @@ class SettingsWindow(QWidget):
         self._seg(gl, "Size", "Resizing keeps the circle where it is.",
                   [(k, v_[0]) for k, v_ in CIRCLE_SIZES.items()], self._s("circle_size", "medium"),
                   lambda k: (ctx.set_look("circle_size", k), refresh_big()), stacked=True)
-        self._toggle(gl, "Show the count", "The number of open thoughts in the middle (off: just a dot).",
-                     "show_count", True, lambda on: (ctx.set_count_vis(on), refresh_big()))
+        self._toggle(gl, "Show the count", "The number of open thoughts in the middle.",
+                     "show_count", False, lambda on: (ctx.set_count_vis(on), refresh_big()))
 
         gl = self._group(v, "Opacity")
         for label, key, desc in (("Circle", "opacity_circle", "See through it a little when it sits over your work."),
@@ -17885,9 +19823,6 @@ class SettingsWindow(QWidget):
                   self._button("Check in now", lambda: ctx.nudges.check_in(preview=True)))
         gl = self._group(v, "When focus starts")
         self._toggle(gl, "A few words of boost", "A short line from the circle as a round begins.", "boost_on", True)
-        self._seg(gl, "Style", "Help to start, a mix, or keep-you-in-flow lines.",
-                  [("yes", "Help me start"), ("sometimes", "A mix"), ("no", "Keep me in flow")],
-                  self._s("procrastinator", "sometimes"), lambda k: self._set("procrastinator", k))
         gl = self._group(v, "Little touches")
         self._toggle(gl, "\"Saved!\" pop", "A word above the circle after a quick note.", "saved_pop", True)
         v.addStretch(1)
@@ -17944,11 +19879,12 @@ class SettingsWindow(QWidget):
             spin.valueChanged.connect(lambda n, k=key: self._set(k, n))
             self._row(gl, f"Snooze button {index}", "Minutes shown on each reminder.", spin)
         gl = self._group(v, "Water and eye breaks")
-        self._seg(gl, "Count", "Focus rounds only, or any time you're at the keyboard (breaks and 1 min away "
-                  "don't count).", [("focus", "Focus rounds"), ("always", "Any screen time")],
-                  self._s("peek_when", "focus"), lambda key: self._set("peek_when", key))
-        self._toggle(gl, "Water reminder", "Every 40 minutes, across rounds.", "peek_water", True)
-        self._toggle(gl, "Look-away reminder", "Every 20 minutes, across rounds.", "peek_eyes", True)
+        self._seg(gl, "Count", "Any time you're using the laptop, or focus rounds only. 5 min away resets "
+                  "the eye count.", [("always", "Laptop use"), ("focus", "Focus rounds only")],
+                  peek_mode(ctx.store.settings), lambda key: self._set("peek_when", key))
+        self._toggle(gl, "Water reminder", "Every 40 minutes, the first after 30.", "peek_water", True)
+        self._toggle(gl, "Look-away reminder", "Every 20 minutes. Never in a round's first 3 minutes.",
+                     "peek_eyes", True)
         self._toggle(gl, "Look-away countdown", "Look at something 20 ft (6 m) away for 20 s. The 20-20-20 rule "
                      "from the American Academy of Ophthalmology. Off: a short peek, gone in 5 s.", "eye_guide", False)
         self._toggle(gl, "Sound first", "A short soft tone just before it shows.", "peek_sound", True)
@@ -18169,7 +20105,7 @@ class SettingsWindow(QWidget):
         gl = self._group(v, "The full list")
         self._toggle(gl, "Close it when I click elsewhere", "Like a popup. It stays open for its own menus and drops.",
                      "close_on_outside", False)
-        self._row(gl, "Tour", "A 30 second walk through, from the circle.", self._button("Take the tour", ctx.start_tour))
+        self._row(gl, "Tour", "A short picture tour, then a hands-on try.", self._button("Take the tour", ctx.start_tour))
         v.addStretch(1)
         return area
 
@@ -18207,7 +20143,7 @@ class SettingsWindow(QWidget):
         for label, days in (("7 days", 7), ("30 days", 30), ("All", None)):
             bl.addWidget(self._button(label, lambda _=False, d=days: ctx.copy_export(d)))
         self._row(gl, "Copy for AI", "Your thoughts with instructions, to paste into an AI chat.", box)
-        self._row(gl, "AI analyses", "Save an AI's answer so the next export builds on it.",
+        self._row(gl, "AI analyses", "Save an AI's answer so the next one doesn't repeat it.",
                   self._button("Open...", ctx.open_analyses))
         self._row(gl, "Data folder", str(DATA_DIR), self._button("Open", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(DATA_DIR)))))
@@ -18219,6 +20155,7 @@ class SettingsWindow(QWidget):
         area, v = self._page(APP_NAME, APP_TAGLINE)
         gl = self._group(v)
         self._row(gl, f"Version {APP_VERSION}", f"Made by {APP_AUTHOR}.")
+        self._row(gl, "Why I made it", APP_STORY)
         for label, desc, url in (("GitHub", "Source code, updates and bug reports.", GITHUB_URL),
                                 ("Buy me a coffee", "PTT is free. A coffee helps me keep building it.", COFFEE_URL)):
             b = self._button("Open" if url else "Coming soon", lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
@@ -18226,6 +20163,9 @@ class SettingsWindow(QWidget):
             self._row(gl, label, desc, b)
         self._row(gl, "Updates", "Gets the newest version from GitHub, then restarts. Your notes stay.",
                   self._button("Restart / update", ctx.restart))
+        self._toggle(gl, "Update automatically", "Checks GitHub at start and every 6 hours. Installs when you're "
+                     "away and no focus round is running, then says what changed. Your notes stay.",
+                     "auto_update", True)
         notices = Path(sys.executable).parent / "THIRD-PARTY-NOTICES.txt"   # only the exe install ships it
         self._row(gl, "Open source parts", "Built with Qt for Python and pynput, both under the LGPL v3.",
                   self._button("View", lambda _=False: QDesktopServices.openUrl(QUrl.fromLocalFile(str(notices))))
@@ -18292,9 +20232,10 @@ class HotkeyDialog(QDialog):
 
 
 # ---------------------------------------------------------------- updates
-def update_script(path=None):
+def update_script(path=None, newer_only=False):
     """Restart / update: swap in the newest parking_lot.py from GitHub. Only this file changes; notes stay.
     A git checkout (someone working on the code) is left alone. Returns updated, current, dev or failed.
+    newer_only (the automatic check): swap only when the download's APP_VERSION is higher than this one.
     The installed exe can't swap its own code: it downloads a newer release's installer instead (installer)."""
     if FROZEN:
         return update_exe()
@@ -18307,7 +20248,7 @@ def update_script(path=None):
         if f'APP_NAME = "{APP_NAME}"'.encode() not in new:
             raise ValueError("download is not Park That Thought")
         compile(new, str(path), "exec")          # never swap in a broken file
-        if new == path.read_bytes():
+        if new == path.read_bytes() or (newer_only and _version(remote_version(new)) <= _version(APP_VERSION)):
             return "current"
         tmp = path.with_name(path.name + ".new")
         tmp.write_bytes(new)
@@ -18321,6 +20262,27 @@ def update_script(path=None):
 
 def _version(text):
     return tuple(int(n) for n in re.findall(r"\d+", text))
+
+
+def remote_version(source):
+    """APP_VERSION inside a downloaded parking_lot.py, or "0" if it has none."""
+    m = re.search(rb'^APP_VERSION = "([^"]+)"', source, re.M)
+    return m.group(1).decode() if m else "0"
+
+
+def whats_new(seen, version=APP_VERSION):
+    """The line said once after an update: the version and its top changes. None on a fresh install (seen is
+    None) or when nothing is new."""
+    if seen is None or _version(seen) >= _version(version):
+        return None
+    lines = next((lines for v, _, lines in CHANGELOG if v == version), ())
+    return " ".join((f"Updated to {version}.",) + tuple(lines[:2]))
+
+
+def can_auto_restart(busy, windows_open, idle_s):
+    """An update waiting restarts the app only when no one would notice: no focus or break round (or a break
+    running over), none of its windows open, and no input for 2 minutes."""
+    return not busy and not windows_open and idle_s >= 120
 
 
 def update_exe():
@@ -18434,10 +20396,12 @@ def main():
             if not lock.tryLock(3000) and not recover_stuck_lock(lock):  # wait covers "Restart" handover
                 return
     store = Store()
+    remember_picks(store.settings)
     apply_theme(store.settings.get("theme", "system"))
     app.styleHints().colorSchemeChanged.connect(lambda _s: apply_theme())
     calendar = GoogleCalendar(store)
-    if not store.settings.get("first_seen"):
+    fresh_install = not store.settings.get("first_seen")
+    if fresh_install:
         store.settings["first_seen"] = time.time()
     TIPS.update(mode=store.settings.get("tips", "auto"), first_seen=store.settings["first_seen"])
     app._caret_sync = CaretSync(app)  # keeps the accessibility caret aligned (kept alive on app)
@@ -18571,6 +20535,7 @@ def main():
             for label, secs in NudgeManager.PAUSES:
                 pm.addAction(label, lambda s_=secs: nd and nd.pause(s_))
         m.addSeparator()
+        m.addAction("Camera check...", lambda: holder["meeting_badge"].open_mirror())
         m.addAction("Google Calendar...", lambda: open_settings("calendar"))
         m.addAction("Settings...", open_settings)
         tl = m.addMenu("Thought log")
@@ -18784,9 +20749,8 @@ def main():
     hotkeys.quick.connect(quickbox.toggle)
     def panel_hotkey():
         """A showing question takes the list hotkey first, so it can be answered from the keyboard."""
-        mb = holder.get("meeting_badge")
         sp = holder.get("speech")
-        for w in (sp if sp is not None and sp._btns else None, session_card, mb.notice if mb else None):
+        for w in (sp if sp is not None and sp._btns else None, session_card):
             if w is not None and w.isVisible() and not w.isActiveWindow():
                 w.take_keys()
                 return
@@ -18794,11 +20758,11 @@ def main():
     hotkeys.panel.connect(panel_hotkey)
     hotkeys.apply(setting("hotkey_quick", DEFAULT_HOTKEY_QUICK), setting("hotkey_panel", DEFAULT_HOTKEY_PANEL))
 
-    bubble.show_count = setting("show_count", True)
-    display_setting = setting("timer_display", "ring")
-    bubble.timer_display = display_setting if display_setting in ("ring", "time", "hidden") else "ring"
+    bubble.show_count = setting("show_count", False)
+    display_setting = setting("timer_display", "time")
+    bubble.timer_display = display_setting if display_setting in ("ring", "time", "hidden") else "time"
     bubble.ring_style = setting("ring_style", "ember") if setting("ring_style", "ember") in RING_STYLE_KEYS else "ember"
-    bubble.set_look(color=setting("circle_color", "auto"), shape=setting("circle_shape", "cloud"),
+    bubble.set_look(color=setting("circle_color", "white"), shape=setting("circle_shape", "cloud"),
                     size=setting("circle_size", "medium"))
     THEME["hooks"].append(bubble.update)
     bubble.timer = timer
@@ -18949,6 +20913,7 @@ def main():
     meeting_badge = MeetingBadge(bubble, calendar)
     holder["meeting_badge"] = meeting_badge
     meeting_badge.open_settings = lambda: open_settings("calendar")
+    meeting_badge.restart = restart
     guard = PresenceGuard(bubble, lambda: [panel, quickbox, confetti, session_card] +
                           ([holder["speech"]] if holder.get("speech") else []) +
                           [meeting_badge, meeting_badge.agenda, meeting_badge.notice])
@@ -18997,8 +20962,6 @@ def main():
     timer.started.connect(on_focus_started)
     timer.away_back.connect(nudges.away_back)
     timer.overrun_return.connect(nudges.back_from_break)
-    if not store.settings.get("procrastinator_asked"):      # first run: one question for the boost style
-        QTimer.singleShot(4000, lambda: None if nudges.quiet_reason() else nudges.ask_style())
 
     # ---- background noise
     noise = NoisePlayer()
@@ -19090,7 +21053,7 @@ def main():
                                idle=idle_seconds())
         if kind:
             peek.peek(kind)
-        counting = (timer.running and timer.kind == "focus") or store.settings.get("peek_when") == "always"
+        counting = (timer.running and timer.kind == "focus") or peek_mode(store.settings) == "always"
         if kind or (counting and time.monotonic() - peek_saved_at[0] >= 300):
             store.save()
             peek_saved_at[0] = time.monotonic()
@@ -19121,57 +21084,24 @@ def main():
     # ---- music logging
     holder["media"] = MediaWatch(store)
 
-    # ---- quick tour: a few speech bubbles from the circle
-    TOUR = [("\U0001F44B", "Hi! I'm your parking spot for stray thoughts. Here's the 30 second tour."),
-            ("\U0001F4AD", "Mid-focus and a thought pulls at you? Scribble the mouse up and down (or use the hotkey) "
-                             "and type it. It's parked. Back to work."),
-            ("\U0001F4E5", "I'm a drop shelf too. Drag a file, screenshot, link or text onto me and I hold it. "
-                             "Later, drag it back out of the list into an email, a chat or a folder."),
-            ("\U0001F5C2\uFE0F", "Click me to open the full list. Flag notes as urgent, itch, distraction, lift, drain or idea."),
-            ("\u23F1\uFE0F", "Start a focus round from the list. I show the countdown on my outline."),
-            ("\U0001F50E", "Ctrl+F in the list searches and filters. History shows everything you've ever parked."),
-            ("\U0001F4C5", "Connect your Google account and I show your next meeting and add events you type. "
-                             "Sign in once in your browser."),
-            ("\u2699\uFE0F", "Right-click me for settings: noise, peeks, check-ins, look. That's it. Go focus!")]
-    GOOGLE_STEP = len(TOUR) - 2
-    tour_state = {"i": None}
-
-    def tour_step():
-        i = tour_state["i"]
-        if i is None or i >= len(TOUR):
-            tour_state["i"] = None
-            return
-        if i == GOOGLE_STEP and calendar.connected:
-            tour_state["i"] += 1
-            return tour_step()
-        face, text = TOUR[i]
-        last = i == len(TOUR) - 1
-        buttons = ([("Connect Google", "tour_google"), ("Later", "tour_next")] if i == GOOGLE_STEP else
-                   [("Done" if last else "Next", "tour_next")] + ([] if last else [("Skip", "tour_skip")]))
-        bubble.hop()
-        speech.say(bubble.geometry(), text, buttons, emoji=face, anim="bounce", timeout_ms=60000)
-
-    def tour_answer(key):
-        if tour_state["i"] is None:
-            return
-        if key == "tour_google":
-            calendar.connect_google()
-        if key in ("tour_next", "tour_google"):
-            tour_state["i"] += 1
-            QTimer.singleShot(0, tour_step)
-        else:
-            tour_state["i"] = None
+    # ---- the tour: a picture tour, then a hands-on guide on the real cloud
+    def start_coach():
+        if holder.get("coach"):
+            holder["coach"].stop()
+        holder["coach"] = Coach(store, bubble, panel, holder["meeting_badge"], calendar, open_settings,
+                                confetti)
+        holder["coach"].start()
 
     def start_tour():
         panel.hide()
-        tour_state["i"] = 0
-        QTimer.singleShot(200, tour_step)
-    speech.closed.connect(tour_answer)
+        if holder.get("coach"):                 # reopened mid-guide: the guide ends, the tour takes over
+            holder["coach"].stop()
+        if "onboarding" not in holder:
+            holder["onboarding"] = Onboarding(store, bubble, calendar, on_try=start_coach)
+        holder["onboarding"].open()
     speech.closed.connect(drop_answer)
     holder["start_tour"] = start_tour
-    if not store.settings.get("tour_seen"):       # first start: the tour, with its Google sign-in step
-        store.settings["tour_seen"] = True
-        store.save()
+    if store.settings.get("onboarding_show", True):    # every start until "Don't open this again" is ticked
         QTimer.singleShot(1500, start_tour)
 
     holder["noise_sync"], holder["noise_vol"] = noise_sync, noise_vol
@@ -19218,6 +21148,57 @@ def main():
     app.aboutToQuit.connect(on_quit)
     said = {"--update=updated": "Updated to the newest version.", "--update=current": "You have the newest version.",
             "--update=failed": "Couldn't reach GitHub, so no update this time."}
+
+    # ---- updates: what changed (once per version), and the automatic check
+    seen = store.settings.get("seen_version") or (None if fresh_install else "0")   # 1.4 and older never set it
+    news = whats_new(seen)
+    if store.settings.get("seen_version") != APP_VERSION:
+        store.settings["seen_version"] = APP_VERSION
+        store.save()
+
+    def show_news():
+        if speech.isVisible() or (holder.get("onboarding") and holder["onboarding"].isVisible()):
+            return QTimer.singleShot(60000, show_news)
+        speech.say(bubble.geometry(), news, [("Update log", "update_log"), ("OK", "update_ok")], 20000, "\U0001f389")
+    speech.closed.connect(lambda key: key == "update_log" and open_settings("about"))
+    if news:
+        said.pop("--update=updated")
+        QTimer.singleShot(4000, show_news)
+    auto = {"ready": None, "busy": False}
+
+    def auto_check():
+        """Every 6 hours (and 2 min after start): fetch a newer version in the background. It installs later,
+        when auto_restart finds you away. Failures only go to error.log."""
+        if not setting("auto_update", True) or auto["ready"] or auto["busy"] or restarting:
+            return
+        auto["busy"] = True
+
+        def run():
+            status = update_script(newer_only=True)
+            if status in ("updated", "installer"):
+                auto["ready"] = status
+            auto["busy"] = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def auto_restart():
+        if not auto["ready"] or restarting:
+            return
+        windows = [w for w in QApplication.topLevelWidgets() if w.isVisible() and
+                   w not in (bubble, meeting_badge) and w.windowType() != Qt.ToolTip]
+        if can_auto_restart(timer.running or bool(timer.overrun_since), bool(windows or app._note_alarms.active),
+                            idle_seconds()):
+            restarting.append(True)
+            store.flush_on_quit()
+            relaunch(auto["ready"])
+    update_timer = QTimer(app)
+    update_timer.setInterval(6 * 3600 * 1000)
+    update_timer.timeout.connect(auto_check)
+    update_timer.start()
+    QTimer.singleShot(120000, auto_check)
+    restart_poll = QTimer(app)
+    restart_poll.setInterval(60000)
+    restart_poll.timeout.connect(auto_restart)
+    restart_poll.start()
     for arg in sys.argv:
         if arg in said:
             QTimer.singleShot(1500, lambda m=said[arg]: toast(m))
