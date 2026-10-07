@@ -84,8 +84,16 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Park stray thoughts, files and images. Get back to work."
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION
+    ("1.5", "7 Oct 2026", ("Updates install by themselves when you're not busy. Turn it off in Settings > About.",
+                           "Check-in: one popup with every answer, simpler and more varied lines.",
+                           "New here? A short tour shows you around.",
+                           "Eye and water peeks count laptop use and never land at the start of a round.",
+                           "Meeting heads-up is a small note that fades by itself.",
+                           "Focus card: roomier, pressed apps are easy to see, Take out shows your net focus.",
+                           "Several reminders due at once share one card.",
+                           "Sharper camera check. The circle and the meeting bar stay on top.")),
     ("1.4", "6 Oct 2026", ("Camera check: see how you look and sound before a call.",
                            "Save a photo a day and make a timelapse video. Faces line up by themselves.",
                            "Add, move and resize events from the bar or the 3 day view.",
