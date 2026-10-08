@@ -58,17 +58,17 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBo
                                QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
                                QDoubleSpinBox, QMenu, QMessageBox, QPushButton, QScrollArea, QTabBar,
                                QToolButton, QToolTip, QVBoxLayout, QWidget)
-from PySide6.QtGui import QActionGroup, QConicalGradient, QLinearGradient, QPainterPath, QRadialGradient, QTextCursor
+from PySide6.QtGui import QActionGroup, QBrush, QConicalGradient, QLinearGradient, QPainterPath, QRadialGradient, QTextCursor
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QAbstractButton, QGraphicsOpacityEffect, QPlainTextEdit, QSizePolicy, QTextEdit
-from PySide6.QtCore import QPropertyAnimation, QDate, QDateTime, QTime, QTimeZone
-from PySide6.QtWidgets import QButtonGroup, QDateEdit, QDateTimeEdit, QTimeEdit, QSlider, QStackedWidget
+from PySide6.QtCore import QPropertyAnimation, QDate, QDateTime, QTime, QTimeZone, QLineF
+from PySide6.QtWidgets import QButtonGroup, QCalendarWidget, QDateEdit, QDateTimeEdit, QTimeEdit, QSlider, QStackedWidget
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QCursor, QFontMetrics
+from PySide6.QtGui import QCursor, QFontMetrics, QTextCharFormat
 from PySide6.QtWidgets import QBoxLayout, QComboBox, QListWidget, QListWidgetItem, QSplitter
 from PySide6.QtWidgets import QFileDialog
 from PySide6.QtWidgets import QColorDialog
-from PySide6.QtWidgets import QSpinBox, QProgressBar
+from PySide6.QtWidgets import QSpinBox, QProgressBar, QWidgetAction
 
 FROZEN = getattr(sys, "frozen", False)   # the Windows installer's exe: notes go where the script install keeps them
 APP_DIR = (Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ParkThatThought" if FROZEN
@@ -83,10 +83,18 @@ DB_FILE = DATA_DIR / "tasks.json"
 LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
-APP_TAGLINE = "Park stray thoughts, files and images. Get back to work."
-APP_VERSION = "1.5"
-CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION
-    ("1.5", "7 Oct 2026", ("Updates install by themselves when you're not busy. Turn it off in Settings > About.",
+APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
+APP_VERSION = "1.5.5"
+CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.5.5", "8 Oct 2026", "Reminders that wait, a calmer camera check", ("Reminders and check-ins wait until you pause typing, so a keypress never answers them.",
+                           "Reminder card: Soon, Today and Tomorrow picks, a More snooze menu, and the note's name opens it.",
+                           "Two meetings at once? The bar shows both and Join opens the one with the call.",
+                           "Moving a repeating event asks: this one, this and following, or all.",
+                           "Camera check: bigger and centred, eye lines and tips for the daily photo, steadier light in the timelapse.",
+                           "Timelapse: pick a date range, delete a photo.",
+                           "Hover an event for its whole card. Pin it to make the bar count down to it.",
+                           "A greeting when you're back after a long break, with an ask for today's photo.")),
+    ("1.5", "7 Oct 2026", "Quiet updates, simpler check-ins", ("Updates install by themselves when you're not busy. Turn it off in Settings > About.",
                            "Check-in: one popup with every answer, simpler and more varied lines.",
                            "New here? A short tour shows you around.",
                            "Eye and water peeks count laptop use and never land at the start of a round.",
@@ -94,21 +102,24 @@ CHANGELOG = (   # Settings > About > Update log, newest first; the top one is AP
                            "Focus card: roomier, pressed apps are easy to see, Take out shows your net focus.",
                            "Several reminders due at once share one card.",
                            "Sharper camera check. The circle and the meeting bar stay on top.")),
-    ("1.4", "6 Oct 2026", ("Camera check: see how you look and sound before a call.",
+    ("1.4", "6 Oct 2026", "Camera check and a daily timelapse", ("Camera check: see how you look and sound before a call.",
                            "Save a photo a day and make a timelapse video. Faces line up by themselves.",
                            "Add, move and resize events from the bar or the 3 day view.",
                            "Event card: copy the event or its link, edit the description, see how it repeats.",
                            "3 day view: sharper text, new icons, Instant meet and a settings button.",
                            "Open source notices come with the installer.")),
-    ("1.3", "5 Oct 2026", ("Restart / update installs a newer version by itself.",)),
-    ("1.2", "5 Oct 2026", ("Windows installer.", "The desktop icon brings the circle back.",
-                           "AI export counts your rhythm and asks about what you haven't noticed.")),
-    ("1.1", "4 Oct 2026", ("First public release.",)),
+    ("1.3", "5 Oct 2026", "Updates in one click", ("Restart / update installs a newer version by itself.",)),
+    ("1.2", "5 Oct 2026", "Windows installer", ("Install with one file, no Python needed.",
+                                                "The desktop icon brings the circle back.",
+                                                "AI export counts your rhythm and asks about what you haven't noticed.")),
+    ("1.1", "4 Oct 2026", "First public release", ("Park a thought in two seconds and get back to work.",)),
 )
 APP_AUTHOR = "G M Iqbal Mahmud"
-APP_STORY = ("Made in grad school. Juggling courses, research, chores and hobbies, I kept thinking about one "
-             "project while working on another. Acting on it took five minutes and cost the focus I had. "
-             "So: park it, get back to work.")
+AUTHOR_URL = "https://gmiqbal.pages.dev/"   # About > Made by
+APP_STORY = ("I made it in grad school. Between courses, research, chores and hobbies, thoughts about one thing "
+             "kept showing up while I worked on another. Acting on one took five minutes, but it cost me the "
+             "focus I had, and getting that back took much longer. So I wanted a place to drop a thought in two "
+             "seconds and trust it would be there at the break.")
 GITHUB_URL = "https://github.com/gmiqbal/ParkThatThought"
 UPDATE_URL = "https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/parking_lot.py"   # Restart / update
 LATEST_API = "https://api.github.com/repos/gmiqbal/ParkThatThought/releases/latest"   # the exe's Restart / update
@@ -539,6 +550,12 @@ class PresenceGuard(QObject):
             u.WindowFromPoint.restype = wintypes.HWND
             u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
             u.GetAncestor.restype = wintypes.HWND
+            u.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+            u.GetWindow.restype = wintypes.HWND
+            u.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+            u.FindWindowExW.restype = wintypes.HWND
+            u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+            u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
             self.u = u
             self.qt = QTimer(self)
             self.qt.setInterval(500)
@@ -615,6 +632,35 @@ class PresenceGuard(QObject):
         except Exception:
             return False
 
+    def _own_bar(self, bh, docked):
+        """While docked, the bar is owned by the taskbar under it. Windows keeps an owned window above its owner
+        in the same step that brings the owner up, so a click on the taskbar can no longer cover the bar for a
+        moment (the flash). Floating, or no taskbar on that screen: no owner. True while owned."""
+        try:
+            u, ct = self.u, self.ct
+            want = 0
+            if docked:
+                mon = int(self.u.MonitorFromWindow(bh, 2) or 0)
+                for cls in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+                    h = u.FindWindowExW(None, None, cls, None)
+                    while h:
+                        if int(u.MonitorFromWindow(h, 2) or 0) == mon:
+                            want = int(h)
+                            break
+                        h = u.FindWindowExW(None, h, cls, None)
+                    if want:
+                        break
+            have = int(u.GetWindow(bh, 4) or 0)  # GW_OWNER; Qt clears it each time the bar is shown
+            if have != want:
+                buf = ct.create_unicode_buffer(64)
+                u.GetClassNameW(have, buf, 64)
+                if want or buf.value in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):  # never drop Qt's own owner
+                    u.SetWindowLongPtrW(bh, -8, want)  # GWLP_HWNDPARENT sets the owner of a top-level window
+            return bool(want)
+        except Exception as e:
+            self._note("taskbar owner failed:", str(e)[:60])
+            return False
+
     def _quns_d3d_fullscreen(self):
         try:
             v = self.ct.c_int(0)
@@ -675,7 +721,9 @@ class PresenceGuard(QObject):
                     if not bar.isVisible():
                         bar.update_meeting()
                     bh = wt.HWND(int(bar.winId()))
-                    dock_refresh = (bar.placement == "taskbar" and bar._dock_signature and
+                    docked = bar.placement == "taskbar" and bool(bar._dock_signature)
+                    owned = self._own_bar(bh, docked)
+                    dock_refresh = (docked and not owned and  # owned: Windows already keeps it above the taskbar
                                     time.monotonic() - bar._last_dock_raise >= 2)
                     if (bar_decision == "raise" or not u.IsWindowVisible(bh) or u.IsIconic(bh) or dock_refresh or
                             self._buried(bh)):
@@ -1172,7 +1220,7 @@ def make_style():
     return f"""
 QWidget#panel {{ background: {C['bg']}; color: {C['text']}; }}
 QLabel#appTitle {{ color: {C['text']}; font-size: 15px; font-weight: 700; padding-left: 2px; }}
-QLabel#appSub {{ color: {C['faint']}; font-size: 11px; padding-left: 2px; }}
+QLabel#appSub {{ color: {C['faint']}; font-size: 11px; padding-left: 3px; }}
 QWidget#roundwin {{ background: transparent; color: {C['text']}; }}
 QWidget#list, QWidget#listwrap {{ background: transparent; }}
 QScrollArea {{ border: none; background: transparent; }}
@@ -1210,7 +1258,10 @@ QToolButton#flag:focus {{ border: 1px solid {C['text']}; }}
 QToolButton#remChip {{ color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 2px 9px;
     font-size: 11px; }}
 QToolButton#remChip:hover, QToolButton#remChip:focus {{ border-color: {C['text']}; }}
-QToolButton#remChip[set="true"] {{ color: {C['accent_text']}; background: {C['accent_soft']}; border-color: {C['accent']};
+QToolButton#remIcon {{ color: {C['dim']}; background: transparent; border: none; border-radius: 10px;
+    min-height: 18px; padding: 3px 7px; margin-bottom: 5px; font-size: 11px; }}
+QToolButton#remIcon:hover, QToolButton#remIcon:focus {{ background: {C['surface_hi']}; }}
+QToolButton#remChip[set="true"], QToolButton#remIcon[set="true"] {{ color: {C['accent_text']}; background: {C['accent_soft']}; border-color: {C['accent']};
     font-weight: 700; }}
 QToolButton#flag[kind="distraction"]:checked {{ color: {C['dist']}; background: {C['dist_bg']}; border-color: {C['dist']}; }}
 QToolButton#flag[kind="urgent"]:checked {{ color: {C['urgent']}; background: {C['urgent_bg']}; border-color: {C['urgent']}; font-weight: 700; }}
@@ -2877,9 +2928,14 @@ class FocusTimer(QObject):
             self.apps[fg] = self.apps.get(fg, 0) + self.APP_SAMPLE_S
 
     def app_minutes(self, top=12):
-        """[{app, title, min}] for this round, biggest first."""
-        rows = sorted(self.apps.items(), key=lambda kv: -kv[1])[:top]
-        return [{"app": a, "title": t, "min": round(s / 60, 1)} for (a, t), s in rows]
+        """[{app, title, min}] for this round, biggest first. Windows past the top few fold into one row per app
+        (title ""), so each app's total stays whole: a browser with 30 tabs isn't cut down to its 12 biggest."""
+        rows = sorted(self.apps.items(), key=lambda kv: -kv[1])
+        rest = {}
+        for (a, _t), s in rows[top:]:
+            rest[a] = rest.get(a, 0) + s
+        rows = rows[:top] + sorted(((a, ""), s) for a, s in rest.items())
+        return [{"app": a, "title": t, "min": round(s / 60, 1)} for (a, t), s in sorted(rows, key=lambda kv: -kv[1])]
 
     def extend_break(self, minutes):
         """Record each explicit 'A few more min' choice without calling it a return from break."""
@@ -3384,6 +3440,19 @@ def idle_seconds():
     return 0.0
 
 
+def keys_busy():
+    """Key or mouse input in the last 1.5 s: you're typing or working in another app. Headless: never."""
+    return IS_WIN and QGuiApplication.platformName() != "offscreen" and idle_seconds() < 1.5
+
+
+def when_idle(w, take):
+    """A popup that came up by itself takes the keyboard only once you pause (1.5 s with no input), so the
+    Space or Enter you were typing for another app never answers it. Gives up if w hides first."""
+    if not keys_busy():
+        return take()
+    QTimer.singleShot(250, w, lambda: w.isVisible() and when_idle(w, take))
+
+
 def mic_or_camera_in_use():
     """True while any app is using the microphone or camera (a call or meeting, most likely).
     Reads Windows' privacy 'last used' records: LastUsedTimeStop == 0 means still in use."""
@@ -3441,7 +3510,8 @@ def windows_says_quiet():
 
 class EmojiFace(QWidget):
     """A big emoji that moves a little, so the circle feels alive: shake (a nervous, tilted, vibrating head),
-    bounce, wiggle, float, tilt, jelly (squash and stretch), nod, sway, spin (one turn) and pulse (a heartbeat).
+    bounce, wiggle, float, tilt, jelly (squash and stretch), nod, sway, spin (one turn), pulse (a heartbeat) and
+    rise (comes up from below, like the sun).
     It pops in, plays for a few seconds, then rests (shake, float and sway keep going gently while it's on
     screen)."""
     ALWAYS = ("shake", "float", "sway")
@@ -3519,6 +3589,8 @@ class EmojiFace(QWidget):
             beat = t % 1.1
             sx = sy = 1 + (0.13 * math.exp(-((beat - 0.12) ** 2) / 0.002) +
                            0.08 * math.exp(-((beat - 0.34) ** 2) / 0.002)) * decay
+        elif self.anim == "rise":           # a sunrise: up from below, slowing as it arrives
+            dy = self.px * 0.45 * (1 - min(1.0, t / 1.2)) ** 3
         c = self.width() / 2
         p.translate(c + dx, c + dy)
         p.rotate(rot)
@@ -3544,10 +3616,14 @@ class SpeechBubble(QWidget):
             QPushButton#chip {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 10px;
                 padding: 5px 11px; font-size: 12px; min-height: 14px; }}
             QPushButton#chip:hover {{ background: {C['accent']}; border-color: {C['accent']}; }}
-            QPushButton#chip:focus {{ border-color: {C['text']}; }}""")
+            QPushButton#chip:focus {{ border-color: {C['text']}; }}
+            QToolButton#sayClose {{ background: transparent; border: none; border-radius: 9px; padding: 2px; }}
+            QToolButton#sayClose:hover {{ background: {C['surface']}; }}""")
         self.tail_right = True
         self.focus_return = FocusReturn()  # the app you were typing in, back when the questions end
         self._keys_at = 0.0                # when a bubble that had the keyboard closed (a follow-up keeps it)
+        self._armed = 0.0                  # keys are ignored until then (a word you were typing doesn't pick)
+        self._said = 0                     # counts bubbles, so a late keyboard grab only takes its own
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 22, 10)
         lay.setSpacing(8)
@@ -3562,6 +3638,16 @@ class SpeechBubble(QWidget):
         top.setSpacing(6)
         top.addWidget(self.face, 0, Qt.AlignTop)
         top.addWidget(self.label, 1)
+        self.close_btn = QToolButton(self)     # top right, the same as Esc: no Skip, Cancel or OK chip to hunt for
+        self.close_btn.setObjectName("sayClose")
+        self.close_btn.setIcon(line_icon("close", C["dim"], 14))
+        self.close_btn.setIconSize(QSize(14, 14))
+        self.close_btn.setToolTip("Close (Esc)")
+        self.close_btn.setAccessibleName("Close")
+        self.close_btn.setFocusPolicy(Qt.NoFocus)
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.clicked.connect(lambda: self._finish("dismiss"))
+        top.addWidget(self.close_btn, 0, Qt.AlignTop)
         lay.addLayout(top)
         self.btn_row = QVBoxLayout()           # rows of chips, wrapped to fit
         self.btn_row.setSpacing(5)
@@ -3615,8 +3701,9 @@ class SpeechBubble(QWidget):
         p.drawPath(path)
 
     def say(self, circle_rect, text, buttons=(), timeout_ms=7000, emoji=None, anim="bounce",
-            minute_input=None, text_input=None):
+            minute_input=None, text_input=None, keys=False):
         """buttons: [(label, response_key)]; clicking closes the bubble and emits closed(response_key).
+        keys: a question that needs an answer takes the keyboard (number keys pick, Esc closes).
         emoji: an optional animated face beside the text. minute_input: (response prefix, maximum minutes[, button]).
         text_input: (response prefix, placeholder, button): the same row takes any text, above the chips."""
         self.timer.stop()
@@ -3639,6 +3726,7 @@ class SpeechBubble(QWidget):
             self.minute_edit.setAccessibleName(f"Custom {minute_input[0]} minutes")
             self.minute_start.setText(minute_input[2] if len(minute_input) > 2 else "Start")
         self.minute_row.setVisible(bool(minute_input or text_input))
+        self.close_btn.setVisible(bool(buttons or minute_input or text_input))   # a plain line just fades
         for b in self._btns:
             b.setParent(None)
             b.deleteLater()
@@ -3696,24 +3784,36 @@ class SpeechBubble(QWidget):
         self.timer.start(timeout_ms)
         if (buttons or minute_input or text_input) and time.monotonic() - self._keys_at < 1.5:
             self.take_keys(field=True, keep_timer=True)  # a follow-up to a question you just answered
+        elif keys and buttons:
+            self._said += 1
+            n = self._said                 # a newer bubble by then decides for itself
+            when_idle(self, lambda: n == self._said and self.take_keys(keep_timer=True, settle=True))
 
     def keyPressEvent(self, e):
         n = e.key() - Qt.Key_1
-        if 0 <= n < min(9, len(self._btns)) and not self.minute_edit.hasFocus():
+        if time.monotonic() < self._armed and e.key() != Qt.Key_Escape:
+            e.accept()                     # the tail of what you were typing elsewhere: swallowed, nothing picked
+        elif 0 <= n < min(9, len(self._btns)) and not self.minute_edit.hasFocus():
             self._btns[n].click()
         elif e.key() == Qt.Key_Escape:
             self._finish("dismiss")
         else:
             super().keyPressEvent(e)
 
-    def take_keys(self, field=False, keep_timer=False):
+    def take_keys(self, field=False, keep_timer=False, settle=False):
         """Takes the keyboard so number keys pick, Esc closes and typed minutes land here (the list hotkey, a
-        question you asked for, a follow-up). field: start in the typing box when there is one."""
+        question you asked for, a follow-up). field: start in the typing box when there is one.
+        settle (a question that popped up by itself): the bubble holds the keys, not a chip, so Space or Enter
+        meant for another app clicks nothing, and keys are ignored for half a second."""
         if not keep_timer:
             self.timer.stop()
         if not self.focus_return.hwnd:
             self.focus_return.remember()
         force_foreground(self)
+        if settle:
+            self._armed = time.monotonic() + 0.5
+            self.setFocus()
+            return
         typing = field and not self.minute_row.isHidden()
         (self.minute_edit if typing or not self._btns else self._btns[0]).setFocus()
 
@@ -4236,6 +4336,45 @@ OVERRUN_LINES = [
 ]
 
 
+# back at the computer after a long gap: (emoji, anim, line) by part of the day
+GREETINGS = {
+    "morning": [
+        ("\U0001F305", "rise", "Good morning. A fresh page today."),
+        ("\u2600\uFE0F", "rise", "Morning! One small win first?"),
+        ("\u2615", "float", "Morning. Coffee first, then one small thing."),
+        ("\U0001F31E", "rise", "Morning! New day, clean slate."),
+        ("\U0001F426", "bounce", "Good morning. The birds are up, and so are you."),
+    ],
+    "afternoon": [
+        ("\U0001F44B", "wiggle", "Good afternoon. Welcome back."),
+        ("\U0001F324\uFE0F", "float", "Welcome back. Plenty of day left."),
+        ("\U0001F33B", "sway", "Afternoon! Good to see you again."),
+        ("\U0001F680", "bounce", "Welcome back. The second half starts now."),
+    ],
+    "evening": [
+        ("\U0001F307", "rise", "Good evening. Welcome back."),
+        ("\U0001F31F", "pulse", "Evening! You showed up today. That counts."),
+        ("\U0001F56F\uFE0F", "float", "Good evening. One calm thing, then rest?"),
+        ("\U0001F343", "sway", "Evening. Slow and steady is still progress."),
+    ],
+    "night": [
+        ("\U0001F989", "tilt", "Hello, night owl. Park what's left and rest soon?"),
+        ("\U0001F319", "float", "Up late. Be kind to tomorrow's you."),
+        ("\u2728", "pulse", "Night owl mode. Small steps, then sleep."),
+        ("\U0001F30C", "sway", "Quiet hours. Park the loose thoughts so they keep till morning."),
+    ],
+}
+
+
+def day_part(hour):
+    return "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening" if 17 <= hour < 22 \
+        else "night"
+
+
+def snapped_today():
+    return any(SNAP_DIR.glob(f"snap-{datetime.now():%Y-%m-%d}-*.jpg"))
+
+
 class NudgeManager(QObject):
     """Friendly check-ins while you're at the computer but not in a focus session, and a boost line when
     a focus session starts. Stays quiet: when turned off or paused, during any timer, in full screen,
@@ -4243,6 +4382,8 @@ class NudgeManager(QObject):
     wants_focus = Signal(float)
     wants_break = Signal(float)
     wants_more_break = Signal(float)          # "a few more min": start a break of this many minutes
+    wants_snap = Signal()                     # "Take snap": open the camera check
+    GREET_GAP_S = 3 * 3600                    # no input this long, then input again: a greeting
 
     def __init__(self, store, timer, bubble, speech, guard_fn, calendar=None):
         super().__init__()
@@ -4290,11 +4431,13 @@ class NudgeManager(QObject):
         now = time.monotonic()
         elapsed = max(0.0, min(60.0, now - self._last_tick))
         self._last_tick = now
+        idle = idle_seconds()
+        if self._watch_return(idle):
+            return
         if self.timer.running or self.timer.overrun_since or not self.enabled():
             self.active_s = 0.0
             self.store.settings["nudge_active"] = [0, time.time()]
             return
-        idle = idle_seconds()
         if idle > 600:            # away time does not count, but prior screen time still does
             self.store.settings["nudge_active"] = [round(self.active_s), time.time()]
             return
@@ -4303,6 +4446,55 @@ class NudgeManager(QObject):
         self.store.settings["nudge_active"] = [round(self.active_s), time.time()]   # saved with the next save
         if self.active_s >= float(self._st("nudge_every_min", 45)) * 60 and not self.quiet_reason():
             self.check_in()
+
+    def _watch_return(self, idle):
+        """Notes when you last touched the keyboard or mouse; back after a long gap, it greets you once.
+        True if it did."""
+        seen = time.time() - idle
+        last = self.store.settings.get("last_input_at")
+        self.store.settings["last_input_at"] = seen
+        if not isinstance(last, (int, float)) or idle >= 120 or seen - last < self.GREET_GAP_S:
+            return False
+        self.active_s = 0.0                   # a long gap starts the check-in clock again
+        return bool(self.greet())
+
+    def greet(self, preview=False):
+        """Good morning, afternoon, evening or night owl, at most once per part of the day. The first one of the
+        day asks for today's snap, unless there is one already, you said no 3 times in a row, or it's night.
+        Returns the line, or None when it stayed quiet."""
+        st = self.store.settings
+        now = datetime.now()
+        part = day_part(now.hour)
+        day = f"{(now - timedelta(hours=5)):%Y-%m-%d}"     # up past midnight still counts as the day before
+        if not preview:
+            if (not st.get("greet_on", True) or self.timer.running or self.timer.overrun_since
+                    or self.speech.isVisible() or self.quiet_reason()
+                    or st.get("nudge_paused_until", 0) > time.time() or st.get("greet_last") == f"{day} {part}"):
+                return None
+            first = not str(st.get("greet_last", "")).startswith(day)
+            st["greet_last"] = f"{day} {part}"
+        else:
+            first = True
+        face, anim, line = pick_fresh(GREETINGS[part], "greet_" + part)
+        buttons = []
+        if first and part != "night" and st.get("snap_ask_on", True):
+            if snapped_today():
+                st["snap_no"] = 0
+            elif preview or int(st.get("snap_no", 0)) < 3:
+                line += " Take today's snap?"
+                if int(st.get("snap_asked", 0)) < 3:
+                    line += " One photo a day becomes a timelapse."
+                    if not preview:
+                        st["snap_asked"] = int(st.get("snap_asked", 0)) + 1
+                buttons = [("Take snap", "snap")]
+        self._asked = "__greet__" if buttons else None
+        self._greet_live = not preview
+        self.bubble.hop()
+        self.speech.say(self.bubble.geometry(), line, buttons, emoji=face, anim=anim,
+                        timeout_ms=30000 if buttons else 8000, keys=bool(buttons))
+        if not preview:
+            self.store.save()
+        return line
 
     def status(self):
         """One line on what check-ins are doing right now (Settings and the circle's menu show it)."""
@@ -4363,7 +4555,7 @@ class NudgeManager(QObject):
         self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=
                          [("Start focus", "focus"), ("Take a break", "break"), ("Forgot the timer", "working"),
                           ("Other task came up", "other_task"), ("I'm on track", "fine"), ("Ask me later", "snooze")],
-                         timeout_ms=30000)
+                         timeout_ms=30000, keys=True)
 
     def _checkin_work(self, preview=False):
         """Name the nearest open work sometimes, without turning every check-in into the same reminder."""
@@ -4417,13 +4609,13 @@ class NudgeManager(QObject):
         prompt = (f"Event starts in {event_span}. How long for this focus round?" if event_span
                   else "How long for this focus round?")
         self._say_followup(prompt,
-                           [(f"{m} min", f"focus_{m}") for m in (5, 10, 25, 50)] + [("Cancel", "focus_cancel")],
+                           [(f"{m} min", f"focus_{m}") for m in (5, 10, 25, 50)],
                            "__focus_length__", emoji="\u23F1\uFE0F", timeout_ms=30000,
                            minute_input=("focus", 600))
 
     def ask_break_minutes(self):
         self._say_followup("How long for a break?",
-                           [(f"{m} min", f"break_{m}") for m in (5, 10, 15, 25)] + [("Cancel", "break_cancel")],
+                           [(f"{m} min", f"break_{m}") for m in (5, 10, 15, 25)],
                            "__break_length__", emoji="\u2615", timeout_ms=30000,
                            minute_input=("break", 600))
 
@@ -4434,14 +4626,14 @@ class NudgeManager(QObject):
         face, line = pick_fresh(WELCOME_BACK_LINES, "welcome_back")
         self._say_followup(line.format(m=fmt_min(round(minutes))),
                            [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"),
+                           keys=True)
 
     def ask_worked_minutes(self):
         """'I was working, forgot the timer': screen time can include scrolling, so ask how long it was work."""
         most = getattr(self, "_active_min", 0) or int(self._st("nudge_every_min", 45))
         opts = [m for m in (10, 20, 30, 45, 60, 90) if m < most - 4][:4]
-        chips = [(f"{m} min", f"worked_{m}") for m in opts] + [(f"All {most} min", f"worked_{most}"),
-                                                                 ("Skip", "worked_0")]
+        chips = [(f"{m} min", f"worked_{m}") for m in opts] + [(f"All {most} min", f"worked_{most}")]
         self._say_followup("Nice. Roughly how long were you actually working? I'll log that as focus.",
                            chips, "__worked__", emoji="\u23F1\uFE0F", timeout_ms=45000,
                            minute_input=("worked", max(1, most), "Log"))
@@ -4449,7 +4641,7 @@ class NudgeManager(QObject):
     def ask_forgot(self):
         """Forgot to start the timer (the list's clock button, or the circle's menu): how long, then what for."""
         self._say_followup("Forgot the timer? Roughly how long were you working?",
-                           [(f"{m} min", f"forgot_{m}") for m in (10, 20, 30)] + [("Cancel", "forgot_cancel")],
+                           [(f"{m} min", f"forgot_{m}") for m in (10, 20, 30)],
                            "__forgot__", emoji="\u23F1\uFE0F", timeout_ms=30000,
                            minute_input=("forgot", 600, "Log"))
         self.speech.take_keys(field=True, keep_timer=True)
@@ -4476,11 +4668,11 @@ class NudgeManager(QObject):
         QTimer.singleShot(0, lambda: self._say_followup(line, [], None, timeout_ms=3500))
 
     def _say_followup(self, text, buttons, tag, emoji="\U0001F44D", timeout_ms=20000, minute_input=None,
-                      text_input=None, anim="bounce"):
+                      text_input=None, anim="bounce", keys=False):
         self._asked = tag
         self.bubble.hop()
         self.speech.say(self.bubble.geometry(), text, buttons, emoji=emoji, anim=anim, timeout_ms=timeout_ms,
-                        minute_input=minute_input, text_input=text_input)
+                        minute_input=minute_input, text_input=text_input, keys=keys)
 
     def away_back(self, minutes, same_session, start_iso):
         """Back after being away mid-focus: offer to take that time out of the session."""
@@ -4490,7 +4682,7 @@ class NudgeManager(QObject):
         face, line = pick_fresh(AWAY_LINES, "away")
         self._say_followup(line.format(m=fmt_min(round(minutes))),
                            [("Keep it", "keep"), ("Take it out", "trim")], "__away__", emoji=face,
-                           anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
+                           anim=pick_fresh(LIVELY_ANIMS, "line_anim"), keys=True)
 
     break_parts = None       # minutes of each break in a row ([5, 5] after "a few more min")
 
@@ -4510,13 +4702,14 @@ class NudgeManager(QObject):
         else:
             face, line = pick_fresh(BREAK_END_LINES, "break_end")
         self._say_followup(line, [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"),
+                           keys=True)
         return line
 
     def ask_more_break(self):
         """How much longer? A few quick picks, or your own number."""
-        self._say_followup("How many more minutes?", [(f"{m} min", f"more_{m}") for m in (2, 5, 10, 15)]
-                           + [("Cancel", "more_cancel")], "__more__", emoji="\u23F3", timeout_ms=30000,
+        self._say_followup("How many more minutes?", [(f"{m} min", f"more_{m}") for m in (2, 5, 10, 15)],
+                           "__more__", emoji="\u23F3", timeout_ms=30000,
                            minute_input=("more", 120))
 
     def overrun_nudge(self, minutes):
@@ -4526,7 +4719,8 @@ class NudgeManager(QObject):
         face, line = pick_fresh(OVERRUN_LINES, "overrun")
         self._say_followup(line.format(m=int(round(minutes))),
                            [("Start focus", "focus"), ("I'm back", "back"), ("A few more min", "more")],
-                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"))
+                           "__overrun__", emoji=face, timeout_ms=45000, anim=pick_fresh(LIVELY_ANIMS, "line_anim"),
+                           keys=True)
 
     BREAK_TAGS = ["Meal", "Call", "Rest", "Walk"]
 
@@ -4552,13 +4746,12 @@ class NudgeManager(QObject):
 
     def ask_tag(self, kind=None, lead="", answer="__tag__", q=None, button="Save"):
         """Ask what the running round (or a forgotten one: answer="__forgot_tag__") is for: past tags as chips, a
-        type box, Skip. Answering is optional; it times out quietly (typing stops the timeout)."""
+        type box, the ✕. Answering is optional; it times out quietly (typing stops the timeout)."""
         kind = kind or self.timer.kind
         self._tag_picks = self.tag_choices(kind)
         q = q or ("What's this break for?" if kind == "break" else "What are you working on?")
         self._say_followup((lead + " " if lead else "") + q,
-                           [(short_text(t, 22), f"tag_{i}") for i, t in enumerate(self._tag_picks)]
-                           + [("Skip", "tag_skip")],
+                           [(short_text(t, 22), f"tag_{i}") for i, t in enumerate(self._tag_picks)],
                            answer, emoji="☕" if kind == "break" else "\U0001F3AF", timeout_ms=20000,
                            text_input=("tagtext", "Type it here (optional)", button))
 
@@ -4581,6 +4774,14 @@ class NudgeManager(QObject):
     def _answered(self, key):
         msg, self._asked = self._asked, None
         if msg is None:
+            return
+        if msg == "__greet__":
+            if key == "snap":
+                self.store.settings["snap_no"] = 0
+                self.wants_snap.emit()
+            elif key == "dismiss" and self._greet_live:      # fading away is not a no
+                self.store.settings["snap_no"] = int(self._st("snap_no", 0)) + 1
+            self.store.save()
             return
         if msg == "__tag__":
             if key.startswith("tagtext_"):
@@ -4606,7 +4807,7 @@ class NudgeManager(QObject):
                 return
             picks = getattr(self, "_tag_picks", [])
             i = int(key[4:]) if key.startswith("tag_") and key[4:].isdigit() else -1
-            self._log_forgot(mins, picks[i] if 0 <= i < len(picks) else "")   # Skip, Esc or no answer: untagged
+            self._log_forgot(mins, picks[i] if 0 <= i < len(picks) else "")   # ✕, Esc or no answer: untagged
             return
         if msg == "__away__":
             if key == "trim" and getattr(self, "_away", None):
@@ -4619,7 +4820,7 @@ class NudgeManager(QObject):
                 self.log_forgotten_focus(mins)
                 QTimer.singleShot(0, lambda: self._say_followup(
                     f"Logged {mins} min as focus. Want a timer running from here?",
-                    [("Start focus", "focus"), ("No thanks", "fine")], "__backfill__"))
+                    [("Start focus", "focus")], "__backfill__"))
             return
         if msg == "__overrun__":
             if key == "focus":
@@ -4872,6 +5073,7 @@ class SessionCard(QWidget):
     def __init__(self):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setObjectName("sessionCard")
         self.setStyleSheet(STYLE + f"""
             QLabel#quip {{ color: {C['text']}; font-size: 14px; font-weight: 600; }}
@@ -6455,11 +6657,14 @@ class ReminderDialog(QDialog):
     """The reminder card: one click on a quick time sets it; or pick a day and a time (type one too, like
     3:30 pm or 20m). Opens beside the button that asked for it. Enter sets, Esc or a click outside cancels."""
 
-    QUICK = [("15 min", 15), ("30 min", 30), ("1 hour", 60), ("3 hours", 180), ("Tonight", "tonight"),
-             ("Tomorrow", "tomorrow")]
+    SOON = [("5 min", 5), ("10 min", 10), ("15 min", 15), ("30 min", 30), ("45 min", 45), ("1 hour", 60),
+            ("2 hours", 120), ("3 hours", 180)]
+    PARTS = [("Early", 7), ("Work start", 9), ("Midday", 12), ("Afternoon", 15), ("Early evening", 17),
+             ("Evening", 19), ("Night", 21), ("Late night", 23)]
+    TABS = ("Soon", "Today", "Tomorrow")
     DAYS_AHEAD = 14
 
-    def __init__(self, current=None, parent=None):
+    def __init__(self, current=None, parent=None, snooze=False):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.removed = False
@@ -6473,6 +6678,14 @@ class ReminderDialog(QDialog):
                 padding: 6px 4px; font-size: 12px; min-width: 72px; }}
             QPushButton#quick:hover, QPushButton#quick:focus {{ background: {C['accent_soft']};
                 border-color: {C['accent']}; color: white; }}
+            QFrame#remTabs {{ background: {C['field']}; border: 1px solid {C['border']}; border-radius: 9px; }}
+            QPushButton#remTab {{ background: transparent; border: none; border-radius: 7px; color: {C['dim']};
+                padding: 4px 10px; font-size: 12px; font-weight: 600; }}
+            QPushButton#remTab:hover, QPushButton#remTab:focus {{ color: {C['text']}; }}
+            QPushButton#remTab:checked {{ background: {C['surface_hi']}; color: {C['text']}; }}
+            QToolButton#remMore {{ background: transparent; border: none; color: {C['faint']}; font-size: 11px;
+                padding: 2px 0; }}
+            QToolButton#remMore:hover, QToolButton#remMore:focus {{ color: {C['text']}; }}
             QComboBox {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
                 border-radius: 8px; padding: 5px 8px; font-size: 12px; }}
             QComboBox:hover, QComboBox:focus {{ border-color: {C['faint']}; }}
@@ -6499,32 +6712,59 @@ class ReminderDialog(QDialog):
         bell = QLabel(inner)
         bell.setPixmap(line_icon("bell", C["accent_text"]).pixmap(15, 15))
         hrow.addWidget(bell)
-        head = QLabel("Change reminder" if current else "Remind me", inner)
+        head = QLabel("Snooze until" if snooze else "Change reminder" if current else "Remind me", inner)
         head.setObjectName("remHead")
         hrow.addWidget(head)
         hrow.addStretch(1)
-        keys = QLabel("1 to 6 pick", inner)
-        keys.setObjectName("remSub")
-        hrow.addWidget(keys)
         v.addLayout(hrow)
 
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        self.chips = []
+        # one-click times in three tabs: Soon (minutes), Today and Tomorrow (parts of the day). Eight each,
+        # so the card stays small while the pool is bigger; Today only lists times still ahead.
         now = datetime.now()
-        quick = [(label, when) for label, when in self.QUICK if self._quick_at(when, now)]
-        for n, (label, when) in enumerate(quick):
-            b = QPushButton(inner)
-            b.setObjectName("quick")
-            at = self._quick_at(when, now)
-            b.setText(label if isinstance(when, int) else f"{label} {clock_text(at)}")
-            b.setToolTip(at.strftime("%a %b %d, ").replace(" 0", " ") + clock_text(at) + f" (key {n + 1})")
-            b.setCursor(Qt.PointingHandCursor)
-            b.setAutoDefault(False)
-            b.clicked.connect(lambda _=False, w=when: self._pick_quick(w))
-            grid.addWidget(b, n // 3, n % 3)
-            self.chips.append(b)
-        v.addLayout(grid)
+        tabs = QFrame(inner)
+        tabs.setObjectName("remTabs")
+        th = QHBoxLayout(tabs)
+        th.setContentsMargins(2, 2, 2, 2)
+        th.setSpacing(2)
+        self.pages = QStackedWidget(inner)
+        self.tab_btns, self.tab_chips = [], []
+        group = QButtonGroup(self)
+        for name in self.TABS:
+            whens = self.SOON if name == "Soon" else [(label, (name.lower(), hour)) for label, hour in self.PARTS]
+            picks = [(f"{label}\n{clock_text(at).replace(':00', '')}", when)    # what it is, then when it rings
+                     for label, when in whens if (at := self._quick_at(when, now))]
+            if not picks:
+                continue                                  # late at night: no Today tab
+            page = QWidget(self.pages)
+            grid = QGridLayout(page)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(6)
+            chips = []
+            for n, (label, when) in enumerate(picks):
+                b = QPushButton(label, page)
+                b.setObjectName("quick")
+                at = self._quick_at(when, now)
+                b.setToolTip(at.strftime("%a %b %d, ").replace(" 0", " ") + clock_text(at) + f" (key {n + 1})")
+                b.setCursor(Qt.PointingHandCursor)
+                b.setAutoDefault(False)
+                b.clicked.connect(lambda _=False, w=when: self._pick_quick(w))
+                grid.addWidget(b, n // 4, n % 4)
+                chips.append(b)
+            grid.setRowStretch(2, 1)
+            self.pages.addWidget(page)
+            t = QPushButton(name, tabs)
+            t.setObjectName("remTab")
+            t.setCheckable(True)
+            t.setAutoDefault(False)
+            t.setCursor(Qt.PointingHandCursor)
+            t.clicked.connect(lambda _=False, i=len(self.tab_btns): self.show_tab(i))
+            group.addButton(t)
+            th.addWidget(t, 1)
+            self.tab_btns.append(t)
+            self.tab_chips.append(chips)
+        v.addWidget(tabs)
+        v.addWidget(self.pages)
+        self.show_tab(0)
 
         sub = QLabel("Or pick a day and time", inner)
         sub.setObjectName("remSub")
@@ -6551,6 +6791,21 @@ class ReminderDialog(QDialog):
         self.preview.setObjectName("remPreview")
         v.addWidget(self.preview)
 
+        # repeat and ring are rarely changed: folded into one quiet line that says what they're set to
+        self.more = QToolButton(inner)
+        self.more.setObjectName("remMore")
+        self.more.setCheckable(True)
+        self.more.setCursor(Qt.PointingHandCursor)
+        self.more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.more.setArrowType(Qt.RightArrow)
+        self.more.setIconSize(QSize(8, 8))
+        self.more.toggled.connect(self._show_more)
+        v.addWidget(self.more)
+        self.extra = QWidget(inner)
+        ev = QVBoxLayout(self.extra)
+        ev.setContentsMargins(0, 0, 0, 0)
+        ev.setSpacing(8)
+        inner = self.extra
         again = QHBoxLayout()
         again.setSpacing(6)
         again_label = QLabel("Repeat", inner)
@@ -6568,7 +6823,7 @@ class ReminderDialog(QDialog):
         again.addWidget(again_label)
         again.addWidget(self.repeat, 1)
         again.addWidget(self.every_n)
-        v.addLayout(again)
+        ev.addLayout(again)
         self.day_row = QWidget(inner)
         dr = QHBoxLayout(self.day_row)
         dr.setContentsMargins(0, 0, 0, 0)
@@ -6583,7 +6838,7 @@ class ReminderDialog(QDialog):
             b.setAccessibleName(name)
             dr.addWidget(b)
             self.day_btns.append(b)
-        v.addWidget(self.day_row)
+        ev.addWidget(self.day_row)
 
         rep = QHBoxLayout()
         rep.setSpacing(6)
@@ -6598,7 +6853,10 @@ class ReminderDialog(QDialog):
         rep.addWidget(ring_label)
         rep.addWidget(self.rings, 1)
         rep.addWidget(self.interval, 1)
-        v.addLayout(rep)
+        ev.addLayout(rep)
+        v.addWidget(self.extra)
+        self.extra.hide()
+        inner = self.extra.parentWidget()
 
         foot = QHBoxLayout()
         self.remove_btn = QPushButton("Remove", inner)
@@ -6609,7 +6867,7 @@ class ReminderDialog(QDialog):
         self.remove_btn.setVisible(bool(current))
         foot.addWidget(self.remove_btn)
         foot.addStretch(1)
-        self.set_btn = QPushButton("Set reminder", inner)
+        self.set_btn = QPushButton("Snooze" if snooze else "Set reminder", inner)
         self.set_btn.setObjectName("setRem")
         self.set_btn.setCursor(Qt.PointingHandCursor)
         self.set_btn.setDefault(True)
@@ -6626,6 +6884,7 @@ class ReminderDialog(QDialog):
             self.rings.setCurrentIndex(max(0, self.rings.findData(current.get("rings", 3))))
             self.interval.setCurrentIndex(max(0, self.interval.findData(current.get("interval_min", 1))))
             self._show_repeat(current.get("repeat"))
+            self.more.setChecked(bool(repeat_text(current.get("repeat"))))
         else:
             self.rings.setCurrentIndex(1)
             start += timedelta(minutes=-start.minute % 15)       # next quarter hour, an hour from now
@@ -6634,11 +6893,13 @@ class ReminderDialog(QDialog):
         self.day.currentIndexChanged.connect(self._update)
         self.time.currentTextChanged.connect(self._update)
         self.rings.currentIndexChanged.connect(self._update)
+        self.interval.currentIndexChanged.connect(self._update)
         self.repeat.currentIndexChanged.connect(self._update)
         for b in self.day_btns:
             b.toggled.connect(self._update)
         self.every_n.valueChanged.connect(self._update)
         self._update()
+        self.more.setVisible(not snooze)          # a snooze only moves the time; repeat and ring stay as set
 
     REPEATS = [("", "Does not repeat"), ("day", "Every day"), ("weekdays", "Weekdays, Mon to Fri"),
                ("week", "Every week, same day"), ("days", "On these days"), ("ndays", "Every few days"),
@@ -6678,14 +6939,30 @@ class ReminderDialog(QDialog):
             return {"every": "month", "dom": at.day}
         return None
 
+    @property
+    def chips(self):
+        """The one-click times in the open tab (number keys pick them)."""
+        return self.tab_chips[self.pages.currentIndex()]
+
+    def show_tab(self, i):
+        self.pages.setCurrentIndex(i)
+        self.tab_btns[i].setChecked(True)
+
+    def _show_more(self, on):
+        self.more.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.extra.setVisible(on)
+        if self.isVisible():
+            self.adjustSize()
+
     @staticmethod
     def _quick_at(when, now):
+        """Where a one-click time points: minutes from now, or ("today" / "tomorrow", hour). A time today less
+        than 15 min away is None, so Today never offers one that's about to pass."""
         if isinstance(when, int):
             return now + timedelta(minutes=when)
-        if when == "tonight":                         # gone after about 7:30 PM, so it never means tomorrow
-            at = now.replace(hour=20, minute=0, second=0, microsecond=0)
-            return at if at > now + timedelta(minutes=30) else None
-        return (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        day, hour = when
+        at = (now + timedelta(days=day == "tomorrow")).replace(hour=hour, minute=0, second=0, microsecond=0)
+        return at if day == "tomorrow" or at > now + timedelta(minutes=15) else None
 
     def _set_when(self, at):
         # findData can't match a Python date, which added a second "today" row with the year
@@ -6737,6 +7014,9 @@ class ReminderDialog(QDialog):
         self.preview.style().polish(self.preview)
         self.set_btn.setEnabled(ok)
         self.interval.setEnabled(self.rings.currentData() != 1)
+        count = self.rings.currentData()
+        rings = "rings once" if count == 1 else f"rings {count} times, {self.interval.currentText()}"
+        self.more.setText(f"Repeat and ring: {repeat_text(self.repeat_value(at or now)) or 'no repeat'}, {rings}")
 
     def _pick_quick(self, when):
         self._set_when(self._quick_at(when, datetime.now()))
@@ -6933,6 +7213,96 @@ def snooze_choices(settings):
     return times
 
 
+def snooze_times(now):
+    """Every time in a reminder card's Snooze menu: (label, minutes or a local datetime)."""
+    times = [("5 min", 5), ("10 min", 10), ("30 min", 30), ("1 hour", 60), ("3 hours", 180)]
+    tonight = now.replace(hour=20, minute=0, second=0, microsecond=0)
+    if tonight - now >= timedelta(minutes=30):
+        times.append(("Tonight", tonight))
+    morning = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    times.append(("This morning", morning) if now.hour < 5 else ("Tomorrow morning", morning + timedelta(days=1)))
+    return times
+
+
+def snooze_menu(button, answer, skip=()):
+    """Give a reminder card button its Snooze menu: each time with when it rings, then Pick a time. Filled on
+    every open, so the clock times are right even when the card has waited a while."""
+    menu = QMenu(button)
+    menu.setStyleSheet(STYLE)
+
+    def pick():
+        at = pick_snooze(button)
+        if at:
+            answer(at)
+
+    def fill():
+        menu.clear()
+        now = datetime.now()
+        for label, when in snooze_times(now):
+            if when in skip:
+                continue
+            at = now + timedelta(minutes=when) if isinstance(when, int) else when
+            menu.addAction(f"{label}\t{clock_text(at)}").triggered.connect(lambda _=False, w=when: answer(w))
+        menu.addSeparator()
+        menu.addAction("Pick a time...").triggered.connect(pick)
+    menu.aboutToShow.connect(fill)
+    fill()
+    button.setMenu(menu)
+    return menu
+
+
+def pick_snooze(anchor):
+    """The reminder picker without repeat and ring, beside `anchor`. Returns a local datetime, or None."""
+    dialog = ReminderDialog(None, anchor.window(), snooze=True)
+    dialog.open_at(anchor)
+    at = dialog.chosen_at() if dialog.exec() == QDialog.Accepted else None
+    dialog.deleteLater()
+    return at
+
+
+class LinkTitle(QLabel):
+    """A note's title that opens the note: hand cursor, underlined on hover or Tab focus, Enter or Space opens."""
+    clicked = Signal()
+
+    def __init__(self, text, parent):
+        super().__init__(text, parent)
+        self.setTextFormat(Qt.PlainText)
+        self.setWordWrap(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
+
+    def _line(self, on):
+        f = self.font()
+        f.setUnderline(on)
+        self.setFont(f)
+
+    def enterEvent(self, e):
+        self._line(True)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._line(self.hasFocus())
+        super().leaveEvent(e)
+
+    def focusInEvent(self, e):
+        self._line(True)
+        super().focusInEvent(e)
+
+    def focusOutEvent(self, e):
+        self._line(self.underMouse())
+        super().focusOutEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(e)
+
+
 class ReminderAlert(QDialog):
     """A persistent note card grows from the cloud until dismissed or snoozed."""
 
@@ -6949,9 +7319,16 @@ class ReminderAlert(QDialog):
         self.face = EmojiFace(34)
         self.face.set("\u23f0", "bounce")
         title_row.addWidget(self.face, 0, Qt.AlignTop)
-        title = QLabel(task.get("title", "Untitled"), self)
-        title.setTextFormat(Qt.PlainText)
-        title.setWordWrap(True)
+        self.open_link = None
+        if note_actions:
+            title = self.open_link = LinkTitle(task.get("title", "Untitled"), self)
+            title.setToolTip("Open it in the list (Alt+O)")
+            title.clicked.connect(lambda: self._answer("open"))
+            QShortcut(QKeySequence("Alt+O"), self, lambda: self._answer("open"))
+        else:
+            title = QLabel(task.get("title", "Untitled"), self)
+            title.setTextFormat(Qt.PlainText)
+            title.setWordWrap(True)
         f = title.font()
         f.setBold(True)
         f.setPointSize(max(11, f.pointSize() + 2))
@@ -6973,18 +7350,14 @@ class ReminderAlert(QDialog):
         self._snooze_row(lay, "Snooze for")
         actions = QHBoxLayout()
         actions.setSpacing(6)
-        self.open_button = self.done_button = None
+        self.done_button = None
         if note_actions:
-            self.open_button = QPushButton("&Open note", self)
-            self.open_button.setToolTip("Show it in the list (Alt+O)")
-            self.open_button.clicked.connect(lambda: self._answer("open"))
             self.done_button = QPushButton("&Done this time" if repeat else "&Done", self)
             self.done_button.setToolTip("It comes back next time; the note stays open (Alt+D)" if repeat
                                         else "Tick it off (Alt+D)")
             self.done_button.clicked.connect(lambda: self._answer("done"))
-            for b in (self.open_button, self.done_button):
-                b.setAutoDefault(False)
-                actions.addWidget(b)
+            self.done_button.setAutoDefault(False)
+            actions.addWidget(self.done_button)
         actions.addStretch(1)
         dismiss = QPushButton("Skip this one" if repeat else "Stop reminder", self)
         if repeat:
@@ -7002,6 +7375,8 @@ class ReminderAlert(QDialog):
         self.setWindowTitle("Note reminder")
         self.setObjectName("reminderAlert")
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setFocusPolicy(Qt.ClickFocus)
         self.tail_right = True
         self.show_tail = True
         self._tail_y = 40
@@ -7014,6 +7389,9 @@ class ReminderAlert(QDialog):
             QDialog#reminderAlert QPushButton#snoozeDefault {{ background: {C['accent']}; color: white;
                 border-color: {C['accent']}; }}
             QDialog#reminderAlert QPushButton:focus {{ border-color: {C['text']}; }}
+            QDialog#reminderAlert QPushButton#snoozeMenu {{ padding-right: 22px; }}
+            QDialog#reminderAlert QPushButton::menu-indicator {{ subcontrol-origin: padding;
+                subcontrol-position: right center; right: 7px; }}
             QDialog#reminderAlert QPushButton#stopRem {{ background: transparent; border: none; color: {C['dim']}; }}
             QDialog#reminderAlert QPushButton#stopRem:hover {{ color: {C['anti']}; }}
             QDialog#reminderAlert QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
@@ -7051,11 +7429,22 @@ class ReminderAlert(QDialog):
             button.clicked.connect(lambda _=False, m=minutes: self._answer(m))
             row.addWidget(button)
             self.snooze_buttons.append(button)
+        self.more_button = QPushButton("More", self)
+        self.more_button.setObjectName("snoozeMenu")
+        self.more_button.setAutoDefault(False)
+        self.more_button.setToolTip("1 hour, 3 hours, tonight, tomorrow morning, or pick a time")
+        snooze_menu(self.more_button, self._answer, skip=times)
+        row.addWidget(self.more_button)
         lay.addLayout(row)
         primary = self.snooze_buttons[min(1, len(self.snooze_buttons) - 1)]
         primary.setObjectName("snoozeDefault")
         primary.setDefault(True)
+        self.setFocus()      # the card, not a button or the title link: Enter snoozes, Space or a letter does nothing
         self.default_snooze = times[self.snooze_buttons.index(primary)]
+
+    def take_keys(self):
+        force_foreground(self)
+        self.setFocus()
 
     def forget(self, task_id):
         """The note was done or its reminder removed elsewhere: close without answering."""
@@ -7174,8 +7563,6 @@ class ReminderGroupAlert(ReminderAlert):
         self.heading = QLabel(self)
         self.heading.setStyleSheet(f"color: {C['accent_text']}; font-size: 12px; font-weight: 700;")
         lay.addWidget(self.heading)
-        snooze = snooze_choices(settings)
-        snooze = snooze[min(1, len(snooze) - 1)]
         box = QWidget()
         col = QVBoxLayout(box)
         col.setContentsMargins(0, 0, 0, 0)
@@ -7185,9 +7572,14 @@ class ReminderGroupAlert(ReminderAlert):
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(5)
-            title = QLabel(t.get("title") or "Untitled", row)
-            title.setTextFormat(Qt.PlainText)
-            title.setWordWrap(True)
+            if note_actions:
+                title = LinkTitle(t.get("title") or "Untitled", row)
+                title.setToolTip("Open it in the list")
+                title.clicked.connect(lambda task=t: self._answer_row(task, "open"))
+            else:
+                title = QLabel(t.get("title") or "Untitled", row)
+                title.setTextFormat(Qt.PlainText)
+                title.setWordWrap(True)
             f = title.font()
             f.setBold(True)
             title.setFont(f)
@@ -7195,14 +7587,18 @@ class ReminderGroupAlert(ReminderAlert):
             repeats = bool(repeat_text((t.get("reminder") or {}).get("repeat")))
             buttons = ([("Done", "done", "It comes back next time; the note stays open" if repeats else "Tick it off")]
                        if note_actions else [])
-            buttons += [(f"{snooze} min", snooze, f"Snooze this one for {snooze} min")]
-            buttons += ([("Open", "open", "Show it in the list")] if note_actions else
+            buttons += [("Snooze", None, "Snooze this one")]
+            buttons += ([] if note_actions else
                         [("Skip" if repeats else "Stop", 0, "Skip this time" if repeats else "Stop this reminder")])
             for label, answer, tip in buttons:
                 b = QPushButton(label, row)
                 b.setToolTip(tip)
                 b.setAutoDefault(False)
-                b.clicked.connect(lambda _=False, task=t, a=answer: self._answer_row(task, a))
+                if answer is None:
+                    b.setObjectName("snoozeMenu")
+                    snooze_menu(b, lambda a, task=t: self._answer_row(task, a))
+                else:
+                    b.clicked.connect(lambda _=False, task=t, a=answer: self._answer_row(task, a))
                 h.addWidget(b)
             col.addWidget(row)
             self.rows[t["id"]] = row
@@ -7303,23 +7699,29 @@ class NoteAlarmManager(QObject):
         for t in tasks:
             self.active[t["id"]] = alert
         alert.show_from_cloud()
-        QTimer.singleShot(0, lambda a=alert: a._resolved or force_foreground(a))
+        QTimer.singleShot(0, lambda a=alert: when_idle(a, lambda: a._resolved or a.take_keys()))
 
     def _answered(self, task, snooze_minutes):
-        """snooze_minutes: minutes to snooze, 0 to stop, or "open" / "done" (both also stop it). A repeating
-        reminder never stops here: it moves on to its next time, and "done" leaves the note open."""
+        """snooze_minutes: minutes to snooze, a local datetime to snooze until, 0 to stop, or "open" / "done"
+        (both also stop it). A repeating reminder never stops here: it moves on to its next time, and "done"
+        leaves the note open."""
         self.active.pop(task["id"], None)
+        if isinstance(snooze_minutes, datetime):
+            until, answer = snooze_minutes.astimezone(timezone.utc), "snooze until " + clock_text(snooze_minutes)
+        elif isinstance(snooze_minutes, int) and snooze_minutes:
+            until, answer = datetime.now(timezone.utc) + timedelta(minutes=snooze_minutes), f"snooze {snooze_minutes}"
+        else:
+            until, answer = None, str(snooze_minutes or "stop")
         try:
-            self.store.log_event("reminder", task, answer=f"snooze {snooze_minutes}" if isinstance(
-                snooze_minutes, int) and snooze_minutes else str(snooze_minutes or "stop"))
+            self.store.log_event("reminder", task, answer=answer)
         except Exception as e:
             log_error(f"reminder log failed: {e}")
         reminder = task.get("reminder") or {}
         repeats = bool(repeat_text(reminder.get("repeat")))
-        if isinstance(snooze_minutes, int) and snooze_minutes:
+        if until:
             if repeats:
                 reminder.setdefault("base", reminder["at"])
-            reminder["at"] = (datetime.now(timezone.utc) + timedelta(minutes=snooze_minutes)).isoformat(timespec="seconds")
+            reminder["at"] = until.isoformat(timespec="seconds")
         elif repeats:
             reminder["at"] = next_reminder_at(reminder)
             reminder.pop("base", None)
@@ -8268,7 +8670,8 @@ def line_icon(kind, color, size=26):
     """Flat line icons on a 24-unit grid (rounded joins, 2-unit strokes), drawn at twice the size so they stay crisp
     on high-DPI screens: "trash", "tag", "bell", "pencil", "open", "eyeoff", "close", "pin", "calendar", "repeat",
     "notes", "video", "plus", "camera", "mic", "dot", "play", "pause", "prev", "next", "folder", "save", "film",
-    "face", "flip", "check", "copy", "link", "left", "right", "refresh" and "gear". A "-off" ending crosses it out
+    "face", "flip", "check", "copy", "link", "left", "right", "refresh", "gear" and "timer". A "-off" ending
+    crosses it out
     ("mic-off")."""
     from PySide6.QtGui import QIcon
     dpr = 2.0
@@ -8511,6 +8914,11 @@ def line_icon(kind, color, size=26):
         gear.closeSubpath()
         p.drawPath(gear)
         p.drawEllipse(QPointF(12, 12), 2.6, 2.6)
+    elif kind == "timer":                                                   # a stopwatch
+        p.drawEllipse(QPointF(12, 13.5), 7.5, 7.5)
+        p.drawLine(QPointF(12, 13.5), QPointF(12, 9.5))
+        p.drawLine(QPointF(10, 2.8), QPointF(14, 2.8))
+        p.drawLine(QPointF(12, 2.8), QPointF(12, 6))
     if crossed:
         p.setPen(QPen(QColor(color), 2.0, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(3.5, 3.5), QPointF(20.5, 20.5))
@@ -8615,7 +9023,7 @@ class SentenceLabel(QLabel):
     def __init__(self, text):
         super().__init__()
         self.full = text
-        self.parts = [p.strip() + "." for p in text.split(".") if p.strip()]
+        self.parts = [p.strip() for p in re.findall(r"[^.?!]+[.?!]?", text) if p.strip()]
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setMinimumWidth(1)
         self.setText(text)
@@ -9494,6 +9902,7 @@ class Panel(RoundedWindow):
         super().__init__(Qt.Window | Qt.WindowStaysOnTopHint)
         self._drag = None
         self.store, self.bubble = store, bubble
+        store._timer.timeout.connect(self._prebuild)    # just after each save: cards are ready before the open
         self.focus_return = FocusReturn()
         self.setObjectName("roundwin")
         self.setAttribute(Qt.WA_AlwaysShowToolTips)   # tooltips even when the list isn't the active window
@@ -9542,15 +9951,11 @@ class Panel(RoundedWindow):
         gear.setText("\u2699")
         gear.setToolTip("Settings")
         gear.clicked.connect(lambda: self._open_settings(gear))
-        head = QVBoxLayout()               # app name + what it does
-        head.setSpacing(0)
-        self.title = QLabel(APP_NAME)
+        self.title = QLabel(APP_NAME)      # app name, left of the buttons; what it does gets its own line below
         self.title.setObjectName("appTitle")
         sub = SentenceLabel(APP_TAGLINE)
         sub.setObjectName("appSub")
-        head.addWidget(self.title)
-        head.addWidget(sub)
-        tabs_row.addLayout(head, 1)
+        tabs_row.addWidget(self.title, 1)
         closeb = QToolButton()
         closeb.setObjectName("help")
         closeb.setText("\u2715")
@@ -9584,6 +9989,8 @@ class Panel(RoundedWindow):
         self.title.ensurePolished()
         self.title.setMinimumWidth(self.title.fontMetrics().horizontalAdvance(APP_NAME) + 16)
         v.addLayout(tabs_row)
+        v.addWidget(sub)
+        v.addSpacing(4)
         v.addWidget(self.tabs)                # only shown with two or more lists
 
         # search row (Ctrl+F or the search button): one box; the funnel inside it holds filter and sort.
@@ -9710,14 +10117,18 @@ class Panel(RoundedWindow):
         qtop.addWidget(self.quick, 1)
         self.quick_reminder = None
         self.reminder_btn = reminder_chip(self, self._edit_quick_reminder)
+        self.reminder_btn.setObjectName("remIcon")      # beside Park, not among the flags: it's a when, not a tag
+        self.reminder_btn.setIconSize(QSize(16, 16))
         self.send_btn = SendButton(self, self._quick_add, [self.quick])
+        qtop.addWidget(self.reminder_btn, 0, Qt.AlignBottom)
         qtop.addWidget(self.send_btn, 0, Qt.AlignBottom)
         qbox.addLayout(qtop)
         self.qrow = QHBoxLayout()
         self.qrow.setSpacing(4)
         frow = QHBoxLayout()
-        frow.addLayout(self.qrow, 1)
-        frow.addWidget(self.reminder_btn)
+        frow.setSpacing(4)
+        frow.addLayout(self.qrow)
+        frow.addStretch(1)
         qbox.addLayout(frow)
         v.addLayout(qbox)
         self.build_quick_flags()
@@ -10538,7 +10949,6 @@ class Panel(RoundedWindow):
             self.qrow.addWidget(b)
             b.setVisible(flag_on(self.store.settings, key))
             self.qflags[key] = b
-        self.qrow.addStretch(1)
         chain = [self.quick] + [self.qflags[k] for k in FLAG_KEYS] + [self.reminder_btn, self.send_btn]
         for a, b2 in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b2)
@@ -10793,8 +11203,8 @@ class Panel(RoundedWindow):
         box.setWindowTitle(f"About {APP_NAME}")
         box.setStyleSheet(STYLE + f"QMessageBox {{ background: {C['bg']}; }}")
         box.setTextFormat(Qt.RichText)
-        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>{APP_STORY}<br><br>Made by {APP_AUTHOR}.<br><br>"
-                    f"Free and open source. If it helps you, a coffee helps me keep building it.<br><br>"
+        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>{APP_STORY}<br><br>Made by {link(AUTHOR_URL, APP_AUTHOR)}.<br><br>"
+                    f"This app is free. If it helped you, a coffee keeps it going. Thanks! \U0001F49B<br><br>"
                     f"{link(GITHUB_URL, 'GitHub')}<br>{link(COFFEE_URL, 'Buy me a coffee')}<br><br>"
                     f"<span style='color:{C['dim']}'>Thoughts stay local. Calendar and phone alerts are optional. No tracking.</span>")
         box.setTextInteractionFlags(Qt.TextBrowserInteraction)
@@ -11312,6 +11722,12 @@ class Panel(RoundedWindow):
             h = hov if time.monotonic() - at < 60 else None
         self.focus_return.remember(h)
 
+    def _prebuild(self):
+        """A note changed while the list is closed: rebuild the cards now, so opening it stays instant."""
+        if (not self.isVisible() and self._built_fp is not None and getattr(self, "_pending_select", None) is None
+                and self._fingerprint() != self._built_fp):
+            self.refresh()
+
     _built_fp = None
     def _fingerprint(self):
         """Everything the cards are built from. If it's unchanged, the cards on screen are still right."""
@@ -11822,12 +12238,14 @@ class QuickBox(RoundedWindow):
 class ToggleSwitch(QAbstractButton):
     """A painted on/off switch with a sliding knob."""
 
-    def __init__(self, on=False, parent=None):
+    def __init__(self, on=False, parent=None, color=None, scale=1.0):
         super().__init__(parent)
+        self.on_color = color or C["accent"]
+        self.zoom = scale
         self.setCheckable(True)
         self.setChecked(bool(on))
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(40, 22)
+        self.setFixedSize(round(40 * scale), round(22 * scale))
         self._k = 1.0 if on else 0.0
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(140)
@@ -11848,7 +12266,8 @@ class ToggleSwitch(QAbstractButton):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        off, on = QColor(C["border"] if theme_dark() else C["faint"]), QColor(C["accent"])
+        p.scale(self.zoom, self.zoom)
+        off, on = QColor(C["border"] if theme_dark() else C["faint"]), QColor(self.on_color)
         k = self._k
         track = QColor(int(off.red() + (on.red() - off.red()) * k), int(off.green() + (on.green() - off.green()) * k),
                        int(off.blue() + (on.blue() - off.blue()) * k))
@@ -12056,7 +12475,7 @@ def _chip(p, rect, text, fg=None, bg=None, px=11, bold=False, opacity=1.0):
     p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
     f = QFont()
     f.setFamilies(["Segoe UI"] + EMOJI_FONTS)
-    f.setPixelSize(px)
+    f.setPixelSize(px + 1 if px <= 11 else px)     # scene text reads one step bigger than the real UI's
     f.setBold(bold)
     p.setFont(f)
     p.setPen(QColor(fg or C["text"]))
@@ -12107,7 +12526,7 @@ def _cloud(p, center, size, pix=None):
 def _text(p, rect, text, px=12, color=None, align=Qt.AlignLeft | Qt.AlignVCenter, bold=False, opacity=1.0):
     f = QFont()
     f.setFamilies(["Segoe UI"] + EMOJI_FONTS)
-    f.setPixelSize(px)
+    f.setPixelSize(px + 1 if px <= 11 else px)     # small scene text was hard to read; one step up
     f.setBold(bold)
     p.save()
     p.setOpacity(p.opacity() * opacity)
@@ -12994,7 +13413,7 @@ class TourSteps(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(40)
+        self.setFixedHeight(42)
         self.setCursor(Qt.PointingHandCursor)
         self.chapter, self.share = 0, 0.0
         self._anim = QVariantAnimation(self)
@@ -13040,7 +13459,7 @@ class TourSteps(QWidget):
             p.drawEllipse(c, 6, 6)
             if done:
                 _text(p, QRectF(c.x() - 6, c.y() - 6, 12, 12), "✓", 9, "#ffffff", Qt.AlignCenter, True)
-            _text(p, QRectF(c.x() - 50, y + 8, 100, 14), name, 11, C["text"] if now else C["dim"], Qt.AlignCenter, now)
+            _text(p, QRectF(c.x() - 50, y + 8, 100, 17), name, 12, C["text"] if now else C["dim"], Qt.AlignCenter, now)
         p.fillRect(QRectF(0, self.height() - 3, self.width(), 3), QColor(C["border"]))
         p.fillRect(QRectF(0, self.height() - 3, self.width() * self.share, 3), QColor(C["accent"]))
 
@@ -13193,7 +13612,6 @@ class Onboarding(RoundedWindow):
             b.clicked.connect(fn)
             foot.addWidget(b)
             return b
-        self.skip_b = button("Skip", "ghost", self.close_tour, "Close the tour (Esc)")
         self.back_b = button("Back", "ghost", lambda: self.go(self.i - 1), "Back (Left arrow)")
         self.next_b = button("Next", "primary", lambda: self.go(self.i + 1), "Next (Right arrow or Enter)")
         self.done_b = button("Done", "ghost", self.close_tour, "Close the tour")
@@ -13228,7 +13646,7 @@ class Onboarding(RoundedWindow):
             QLabel#obBetter {{ background: {C['glimmer_bg']}; color: {C['glimmer']}; font-size: 12px;
                 font-weight: 700; border: 1px solid {C['glimmer_bg']}; border-radius: 11px; padding: 3px 10px; }}
             QLabel#obAside {{ color: {C['dim']}; font-size: 12px; }}
-            QLabel#obCount, QLabel#obNote {{ color: {C['faint']}; font-size: 11px; }}
+            QLabel#obCount, QLabel#obNote {{ color: {C['faint']}; font-size: 12px; }}
             QLabel#obAsk {{ color: {C['text']}; font-size: 12px; font-weight: 600; }}
             QLabel#obStatus {{ color: {C['dim']}; font-size: 12px; }}
             QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
@@ -13314,8 +13732,7 @@ class Onboarding(RoundedWindow):
             box.setVisible(s["live"] == key)
         self.count.setText(f"{i + 1} / {len(TOUR_SLIDES)}")
         self.back_b.setVisible(i > 0)
-        for b in (self.skip_b, self.next_b):
-            b.setVisible(not last)
+        self.next_b.setVisible(not last)
         for b in (self.done_b, self.try_b):
             b.setVisible(last)
         if self.isVisible() and not (self.focusWidget() or self).isVisible():   # focus was on a button that hid
@@ -13439,7 +13856,7 @@ def coach_steps(store, bubble, panel, badge, calendar, hotkey):
     watch() (called as the card shows; returns its done() test, or None for a card that waits for a chip) and
     chips. The meeting bar steps only come while the bar shows: it hides with no calendar or when turned off."""
     st = store.settings
-    chips = [("Skip", "next"), ("End tour", "end")]
+    chips = [("Skip", "next")]                  # the card's ✕ (or Esc) ends the tour
 
     def cloud():
         return bubble.geometry() if bubble.isVisible() else None
@@ -13484,7 +13901,7 @@ def coach_steps(store, bubble, panel, badge, calendar, hotkey):
                 if calendar is not None and calendar.connected else
                 "Connect Google in Settings > Calendar to get the meeting bar, camera check and timelapse.")
         steps.append(dict(key="settings", emoji="\u2699\uFE0F", text=text, target=None, watch=None,
-                          chips=[("Open Settings", "settings"), ("Not now", "next"), ("End tour", "end")]))
+                          chips=[("Open Settings", "settings"), ("Not now", "next")]))
     steps.append(dict(key="done", emoji="\U0001F389", text="You're all set. Right-click me any time for more.",
                       target=cloud, watch=None, chips=[("Done", "done")]))
     return steps
@@ -13493,7 +13910,7 @@ def coach_steps(store, bubble, panel, badge, calendar, hotkey):
 class Coach(QObject):
     """The hands-on guide after the picture tour ("Try it for real"): one card at a time from the real cloud, a
     ring on what to click, and the next card once the user has done it (checked every 250 ms). Cards wait 10 min.
-    Skip moves on; End tour, Esc or the wait running out end it, with no confetti. It never opens the camera."""
+    Skip moves on; the card's ✕, Esc or the wait running out end it, with no confetti. It never opens the camera."""
     WAIT_MS = 10 * 60 * 1000
 
     def __init__(self, store, bubble, panel, badge, calendar, open_settings, confetti, on_end=lambda finished: None):
@@ -13502,6 +13919,7 @@ class Coach(QObject):
         self.open_settings, self.confetti, self.on_end = open_settings, confetti, on_end
         self.card = SpeechBubble()              # its own card, not the nudges' one
         self.card.closed.connect(self._answer)
+        self.card.close_btn.setToolTip("End tour (Esc)")
         self.spot = Spotlight()
         self.poll = QTimer(self)
         self.poll.setInterval(250)
@@ -13549,7 +13967,7 @@ class Coach(QObject):
         if key in ("next", "settings"):
             QTimer.singleShot(0, self._next)
         else:
-            self._end(key == "done")            # Done on the last card, or End tour / Esc / timeout
+            self._end(key == "done")            # Done on the last card, or the ✕ / Esc / timeout
 
     def _end(self, finished):
         self.running, self.done = False, None
@@ -13573,25 +13991,30 @@ QListWidget#side::item:hover:!selected {{ background: {C['surface_hi']}; color: 
 QScrollArea#page {{ background: {C['bg']}; border: none; }}
 QWidget#pageBody {{ background: {C['bg']}; }}
 QLabel#pageTitle {{ color: {C['text']}; font-size: 18px; font-weight: 700; }}
-QLabel#pageSub {{ color: {C['faint']}; font-size: 11px; }}
+QLabel#pageSub {{ color: {C['faint']}; font-size: 12px; }}
 QLabel#section {{ color: {C['dim']}; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-top: 10px; }}
 QFrame#group {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 10px; }}
-QLabel#rowTitle {{ color: {C['text']}; font-size: 12px; }}
-QLabel#rowDesc {{ color: {C['faint']}; font-size: 11px; }}
+QLabel#rowTitle {{ color: {C['text']}; font-size: 13px; }}
+QLabel#rowDesc {{ color: {C['faint']}; font-size: 12px; }}
+QLabel#logLine {{ color: {C['dim']}; font-size: 12px; }}
+QLabel#story {{ color: {C['dim']}; font-size: 13px; padding: 6px 0; }}
 QToolButton#fold {{ color: {C['dim']}; font-size: 11px; font-weight: 700; text-align: left; border: none;
     background: transparent; padding: 10px 0 2px 0; }}
 QToolButton#fold:hover, QToolButton#fold:focus {{ color: {C['text']}; }}
-QLabel#value {{ color: {C['dim']}; font-size: 11px; min-width: 38px; }}
+QPushButton#logHead {{ color: {C['text']}; font-size: 13px; text-align: left; border: none; background: transparent;
+    padding: 6px 0 2px 0; }}
+QPushButton#logHead:hover, QPushButton#logHead:focus {{ color: {C['accent_text']}; }}
+QLabel#value {{ color: {C['dim']}; font-size: 12px; min-width: 38px; }}
 QKeySequenceEdit, QLineEdit {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 6px; padding: 3px 6px; }}
 QPushButton#seg {{ background: {C['field']}; color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 0;
-    padding: 4px 11px; font-size: 11px; }}
+    padding: 4px 11px; font-size: 12px; }}
 QPushButton#seg[pos="first"] {{ border-top-left-radius: 7px; border-bottom-left-radius: 7px; }}
 QPushButton#seg[pos="last"] {{ border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
 QPushButton#seg:checked {{ background: {C['accent']}; color: white; border-color: {C['accent']}; }}
 QPushButton#seg:hover:!checked {{ background: {C['surface_hi']}; color: {C['text']}; }}
 QPushButton#act {{ background: {C['surface_hi']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 7px;
-    padding: 5px 12px; font-size: 11px; }}
+    padding: 5px 12px; font-size: 12px; }}
 QPushButton#act:hover {{ border-color: {C['accent']}; }}
 QPushButton#act:disabled {{ color: {C['border']}; border-color: {C['surface_hi']}; }}
 QSlider::groove:horizontal {{ height: 4px; background: {C['border']}; border-radius: 2px; }}
@@ -13952,6 +14375,27 @@ def rrule_text(rrule, start):
     return text
 
 
+def bar_events(events, now, pinned=None):
+    """The event the meeting bar shows, and the others sharing time with it (soonest first).
+    Pinned wins. Of events running now, the one that started last (the meeting you just moved to); else the
+    next one. Ties go to the one with a call link, then the one ending first."""
+    def key(e):
+        return e["start"], not (e.get("join") and e.get("url")), e["end"]
+    live = sorted((e for e in events if e["end"] > now), key=key)
+    running = [e for e in live if e["start"] <= now]
+    shown = pinned or (max(running, key=lambda e: (e["start"], -key(e)[1], -e["end"].timestamp())) if running
+                       else live[0] if live else None)
+    if shown is None or shown.get("all_day"):
+        return shown, []
+    return shown, [e for e in live if e is not shown and e["start"] < shown["end"] and
+                   e["end"] > max(now, shown["start"])]
+
+
+def event_pin_key(event):
+    """Names one occurrence of an event, to keep the meeting bar counting down to it (`meeting_bar_pin`)."""
+    return f"{event.get('event_id') or event['title']}|{event['start'].isoformat()}"
+
+
 MEET_NOW_URL = "https://meet.google.com/new"  # Google starts a fresh call in the default browser
 
 
@@ -13994,6 +14438,10 @@ def calendar_events(rows, now, past_days=0):
             continue  # invalid date
         if end <= now - timedelta(days=past_days) or end <= start:
             continue
+        try:        # where a repeat sat before it was moved on its own; a series splits there
+            original = datetime.fromisoformat(row["originalStartTime"]["dateTime"].replace("Z", "+00:00")).astimezone()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            original = start
         all_day = all_day or end - start >= timedelta(hours=24)
         entry_points = row.get("conferenceData", {}).get("entryPoints", [])
         join = (row.get("hangoutLink") or next((p.get("uri") for p in entry_points
@@ -14016,7 +14464,8 @@ def calendar_events(rows, now, past_days=0):
                                                      calendar_color(row.get("_calendar_color"))),
                        "series_key": calendar_series_key(identity) if identity else "",
                        "event_id": str(row.get("id") or ""),
-                       "series_id": str(row.get("recurringEventId") or ""), "all_day": all_day,
+                       "series_id": str(row.get("recurringEventId") or ""), "original_start": original,
+                       "all_day": all_day,
                        # you can move its times: your calendar allows writes and you made it, or guests may edit
                        "editable": row.get("_calendar_role") in ("owner", "writer")
                                    and bool((row.get("organizer") or {}).get("self") or row.get("guestsCanModify"))})
@@ -14075,6 +14524,11 @@ GOOGLE_CALENDAR_COLORS = {
     "#fbe983": "#e4c441", "#fad165": "#f6bf26", "#92e1c0": "#33b679", "#9fe1e7": "#039be5", "#9fc6e7": "#4285f4",
     "#4986e7": "#3f51b5", "#9a9cff": "#7986cb", "#b99aff": "#b39ddb", "#c2c2c2": "#616161", "#cabdbf": "#a79b8e",
     "#cca6ac": "#ad1457", "#f691b2": "#d81b60", "#cd74e6": "#8e24aa", "#a47ae2": "#9e69af"}
+
+
+# what Google fills in itself; a copied event leaves these out (a call link is made fresh, not copied)
+GOOGLE_EVENT_READ_ONLY = {"kind", "etag", "id", "htmlLink", "created", "updated", "creator", "organizer", "iCalUID",
+                          "sequence", "recurringEventId", "originalStartTime", "hangoutLink", "conferenceData"}
 
 
 def event_choice(parent, text, choices):
@@ -14337,6 +14791,10 @@ class GoogleCalendar(QObject):
         self.poll = QTimer(self)
         self.poll.setInterval(5 * 60 * 1000)
         self.poll.timeout.connect(self.refresh)
+        self.retry = QTimer(self)    # a failed update (no network yet after sleep) tries again soon, not in 5 min
+        self.retry.setSingleShot(True)
+        self.retry.setInterval(30 * 1000)
+        self.retry.timeout.connect(self.refresh)
         if self.connected:
             self.refresh()       # network work runs in a thread while the rest of the UI is built
 
@@ -14385,6 +14843,11 @@ class GoogleCalendar(QObject):
 
     def _sync_feed_views(self):
         self._set_events(self._visible_feed_events(), self._visible_recent_feed_events())
+
+    def _pinned(self, events):
+        """The event counted down on the bar (B on its card), while it isn't over."""
+        pin, now = self.store.settings.get("meeting_bar_pin"), datetime.now().astimezone()
+        return [e for e in events if pin and e["end"] > now and event_pin_key(e) == pin]
 
     def _set_events(self, events, recent):
         """Timed events feed the bar, cues and grid; all-day ones only the agenda's day strip."""
@@ -14683,7 +15146,12 @@ class GoogleCalendar(QObject):
             self.events_updated.emit()
             self.changed.emit()
         elif kind == "feed_events":
+            old = self._feed_events
             self._feed_events, failures, metadata = data
+            if failures:            # a calendar that didn't load keeps the event pinned to the bar
+                keys = {event_pin_key(e) for e in self._feed_events}
+                self._feed_events += [e for e in self._pinned(old) if event_pin_key(e) not in keys]
+                self.retry.start()
             items = self.feed_items
             changed_items = "google_calendar_feed" in self.store.settings
             for item in items:
@@ -14727,9 +15195,11 @@ class GoogleCalendar(QObject):
             self.changed.emit()
         elif kind == "error":
             self.status = data or "Couldn't update Google Calendar."
-            self._set_events([], [])  # never present an old meeting as a fresh one
+            # never present an old meeting as a fresh one, except the one you pinned to the bar, till it ends
+            self._set_events(self._pinned(self.events + self.all_day), [])
             if self.connected:
                 self.poll.start()
+                self.retry.start()
             self.events_updated.emit()
             self.changed.emit()
 
@@ -14863,14 +15333,67 @@ class GoogleCalendar(QObject):
                 self._finished.emit((0, "added", (False, f"Event not {done}. {exc}", True)))
         threading.Thread(target=send, daemon=True).start()
 
-    def move_event(self, event, start, end):
-        """New start and end for one event (an edge dragged in the grid), shown at once."""
+    def move_event(self, event, start, end, scope="This event"):
+        """New start and end for one event (an edge dragged in the grid), shown at once. A repeat can also move
+        "All events" (the series shifts by the same amount, to the same length) or "This and following" (the
+        series ends just before this one and a copy of it repeats from the new time)."""
+        if scope != "This event" and event.get("series_id"):
+            self._move_series(event, start, end, scope)
+            return
         for e in [event] + self.events + self.recent_events:
             if e is event or (e.get("event_id") == event["event_id"] and e.get("calendar_id") == event["calendar_id"]):
                 e["start"], e["end"] = start, end
         self.events_updated.emit()
         self.save_event(event, event["event_id"], {"start": {"dateTime": start.isoformat()},
                                                    "end": {"dateTime": end.isoformat()}}, "PATCH", "changed")
+
+    def _move_series(self, event, start, end, scope):
+        shift, length = start.replace(tzinfo=None) - event["start"].replace(tzinfo=None), end - start
+        cutoff, original = event["start"], event.get("original_start") or event["start"]
+        moving = {id(e): e for e in [event] + self.events + self.recent_events
+                  if e is event or (e.get("series_id") == event["series_id"] and
+                                    e.get("calendar_id") == event["calendar_id"] and
+                                    (scope == "All events" or e["start"] >= cutoff))}
+        for e in moving.values():
+            e["start"] = e["start"] + shift
+            e["end"] = e["start"] + length
+        self.events_updated.emit()
+        auth = dict(self.store.settings.get("google_calendar_auth") or {})
+        events_url = ("https://www.googleapis.com/calendar/v3/calendars/" +
+                      urllib.parse.quote(event["calendar_id"], safe="") + "/events")
+        master_url = events_url + "/" + urllib.parse.quote(event["series_id"], safe="")
+
+        def send():
+            try:
+                token = calendar_access(auth)
+                master = calendar_json(master_url, token=token)
+                zone = master["start"].get("timeZone")
+                stamp = lambda dt: dict({"dateTime": dt.isoformat()}, **({"timeZone": zone} if zone else {}))
+                first = datetime.fromisoformat(master["start"]["dateTime"].replace("Z", "+00:00"))
+                if scope == "All events" or original <= first:
+                    calendar_json(master_url, token=token, method="PATCH",
+                                  body={"start": stamp(first + shift), "end": stamp(first + shift + length)})
+                else:
+                    rules = master.get("recurrence") or []
+                    rule = next(r for r in rules if r.startswith("RRULE:"))
+                    others, parts = [r for r in rules if r != rule], rule[6:].split(";")
+                    kept = [p for p in parts if not p.startswith(("UNTIL=", "COUNT="))]
+                    count = next((int(p[6:]) for p in parts if p.startswith("COUNT=")), 0)
+                    if count:       # the copy repeats only as many times as the old series had left
+                        before = calendar_json(master_url + "/instances?maxResults=2500&fields=items(id)&timeMax=" +
+                                               urllib.parse.quote(original.astimezone(timezone.utc).isoformat()),
+                                               token=token).get("items", [])
+                        parts = kept + [f"COUNT={max(1, count - len(before))}"]
+                    copy = {k: v for k, v in master.items() if k not in GOOGLE_EVENT_READ_ONLY}
+                    copy.update(start=stamp(start), end=stamp(end), recurrence=others + ["RRULE:" + ";".join(parts)])
+                    calendar_json(events_url, token=token, body=copy)      # the copy first: a failure never loses events
+                    until = (original.astimezone(timezone.utc) - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
+                    calendar_json(master_url, token=token, method="PATCH",
+                                  body={"recurrence": others + ["RRULE:" + ";".join(kept + ["UNTIL=" + until])]})
+                self._finished.emit((0, "added", (True, "Connected. Event changed.", True)))
+            except Exception as exc:
+                self._finished.emit((0, "added", (False, f"Event not changed. {exc}", True)))
+        threading.Thread(target=send, daemon=True).start()
 
     def change_event(self, event, series=False, delete=False, color=None, title=None, description=None):
         """Delete, or rename, recolor and/or rewrite the description of one event or every event in its series
@@ -15260,23 +15783,31 @@ def call_provider(url):
 
 class EventDetails(QFrame):
     """What a calendar event is and what you can do with it, like Google's event card. Icons at the top: edit (E),
-    delete (Del), copy it all (C), copy its link to share (L), open in Google Calendar (O), close (Esc); copy and
-    link say "Copied" under their icon. The title sits beside a stripe in the event's color and wraps; a long name
+    delete (Del), count down to it on the meeting bar (B, on and off), copy it all (C), copy its link (L), open in
+    Google Calendar (O), close (Esc); the copies say
+    "Copied" above their icon. Every icon has its own tip above it, past the first week too. The title sits beside a stripe in the event's color and wraps; a long name
     makes the card wider, up to a limit. Under it the day and time, then how it repeats, place, notes (links
     clickable, long notes scroll) and calendar, each with its own icon, and a Join button (J). Edit turns the name
     and notes into boxes and shows the color squares; Save (Enter in the name) sends them, Cancel (Esc) puts them
-    back. A click outside closes it. `preview` makes a hover card: no buttons, never takes focus or clicks, notes cut
-    to a few lines and "more", and on the meeting bar (no grid) a line saying a click opens the calendar."""
+    back. A click outside closes it. `hover` is the same card shown on hover in the 3 day calendar: it never takes
+    focus until you click it, then a click outside closes it. `preview` is the meeting bar's hover card: no buttons,
+    never takes focus or clicks, notes cut to a few lines and "more", and a line saying a click opens the calendar."""
 
-    def __init__(self, event, parent=None, grid=None, preview=False):
+    def __init__(self, event, parent=None, grid=None, preview=False, hover=False, also=()):
         super().__init__(parent, (Qt.ToolTip | Qt.WindowStaysOnTopHint | Qt.WindowTransparentForInput if preview
+                                  else Qt.Tool | Qt.WindowStaysOnTopHint if hover
                                   else Qt.Popup) | Qt.FramelessWindowHint)
-        self.info, self.grid = event, grid
+        self.info, self.grid, self.hover = event, grid, hover
         cal = grid.agenda.calendar if grid is not None else None
         can_edit = bool(not preview and cal is not None and cal.can_add and event.get("editable"))
         self.editing = False
-        self.bubble = None                        # the "Copied" word under the copy and link icons
+        self.clicked_in = False                   # a hover card you clicked: closes when you click elsewhere
+        self.bubble = None                        # an icon's tip, or "Copied", above the icon
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_AlwaysShowToolTips)     # the hover card is never the active window
+        self.setProperty("keep_tips", True)             # icons only: their tips stay past the first week (TipGate)
+        if hover:
+            self.setAttribute(Qt.WA_ShowWithoutActivating)
         if preview:
             self.setAttribute(Qt.WA_ShowWithoutActivating)
             self.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -15317,6 +15848,7 @@ class EventDetails(QFrame):
         v.setContentsMargins(16, 14 if preview else 8, 16 if preview else 8, 14 if preview else 16)
         v.setSpacing(7)
         self.edit_btn = self.delete_btn = self.copy_btn = self.link_btn = self.open_btn = self.join_btn = None
+        self.count_btn = None
         self.colors = self.notes_edit = None
         self.page = event.get("page") or ("" if event.get("join") else event.get("url", ""))
         if not preview:
@@ -15333,17 +15865,33 @@ class EventDetails(QFrame):
                 b.setAccessibleName(tip.split(" (")[0])
                 b.setCursor(Qt.PointingHandCursor)
                 b.clicked.connect(fn)
+                b.installEventFilter(self)          # swallows Qt's tip: ours shows above it (_poll_tip)
                 top.addWidget(b)
                 return b
+            self.tip_for = None
+            self.tip_timer = QTimer(self)
+            self.tip_timer.setSingleShot(True)
+            self.tip_timer.setInterval(500)
+            self.tip_timer.timeout.connect(lambda: self.tip_for and self.show_bubble(self.tip_for,
+                                                                                    self.tip_for.toolTip()))
+            self.tip_poll = QTimer(self)            # ponytail: asks the cursor; Windows sends an inactive card's
+            self.tip_poll.setInterval(120)          # icons no Enter or Leave, so those never showed a tip
+            self.tip_poll.timeout.connect(self._poll_tip)
+            self.tip_poll.start()
             if can_edit:
                 self.edit_btn = icon("pencil", "Edit name, notes and color (E)", self.start_edit)
                 self.delete_btn = icon("trash", "Delete (Del)", lambda: self.act(lambda: grid.change_event(
                     event, delete=True)))
+            bar = getattr(grid.agenda, "bar", None) if cal is not None else None
+            if hasattr(bar, "update_meeting") and event["end"] > datetime.now().astimezone():
+                self.count_btn = icon("timer", "", self.toggle_countdown)
+                self._count_state()
             self.copy_btn = icon("copy", "Copy details (C)",
                                  lambda: self.copy(self.details_text(), self.copy_btn, "Copied"))
             if self.page:
-                self.link_btn = icon("link", "Copy event link to share (L)",
+                self.link_btn = icon("link", "Copy event link (L)",
                                      lambda: self.copy(self.page, self.link_btn, "Link copied"))
+            if self.page:
                 self.open_btn = icon("open", "Open in Google Calendar (O)",
                                      lambda: self.act(lambda: QDesktopServices.openUrl(QUrl(self.page))))
             self.close_btn = icon("close", "Close (Esc)", self.close)
@@ -15487,10 +16035,29 @@ class EventDetails(QFrame):
             self.join_btn.clicked.connect(lambda: self.act(lambda: QDesktopServices.openUrl(QUrl(event["url"]))))
             v.addSpacing(6)
             line(mark(), self.join_btn, fill=False)
+        if also:                                  # the bar's hover card: the others at the same time, each in brief
+            v.addSpacing(4)
+            v.addWidget(label("Also at this time", "evFoot"))
+            for x in also:
+                dot = QFrame(inner)
+                dot.setFixedSize(18, 30)
+                dot.setStyleSheet(f"QFrame {{ background: {event_color(x)}; border-radius: 2px; margin: 4px 7px; }}")
+                brief = QWidget(inner)
+                bl = QVBoxLayout(brief)
+                bl.setContentsMargins(0, 0, 0, 0)
+                bl.setSpacing(1)
+                name = label(x["title"], "evLine")
+                name.setStyleSheet("font-weight: 700;")
+                bl.addWidget(name)
+                call = call_provider(x.get("url")) if x.get("join") else ""
+                bits = [f"{clock_text(x['start'])} - {clock_text(x['end'])}",
+                        (f"{call} call" if call else "Video call") if x.get("join") and x.get("url") else "",
+                        x.get("location", "")]
+                bl.addWidget(label(" · ".join(b for b in bits if b), "evDim"))
+                line(dot, brief)
         if preview:                               # say what a click does
             v.addSpacing(4)
-            v.addWidget(label("Click to open your 3 day calendar." if grid is None else "Click for actions.",
-                              "evFoot"))
+            v.addWidget(label("Click to open your 3 day calendar.", "evFoot"))
         inner.setFixedWidth(max(inner.width(), v.totalMinimumSize().width()))     # room for Join and the icons
 
     def paint_stripe(self, color):
@@ -15502,28 +16069,88 @@ class EventDetails(QFrame):
         lines = [e["title"], event_when_long(e)]
         if e.get("repeat") or e.get("series_id"):
             lines.append(e.get("repeat") or "Repeats")
-        for name, value in (("Where", e.get("location")), ("Join", e.get("join") and e.get("url")),
-                            ("Event", self.page), ("Calendar", e.get("calendar_name"))):
+        for name, value in (("Where", e.get("location")), ("Join", e.get("join") and e.get("url"))):
             if value:
                 lines.append(f"{name}: {value}")
         if e.get("details"):
             lines += ["", e["details"]]
         return "\n".join(lines)
 
+    def _count_state(self):
+        settings = self.grid.agenda.calendar.store.settings
+        on = settings.get("meeting_bar_pin") == event_pin_key(self.info)
+        self.count_btn.setIcon(line_icon("timer", C["accent"] if on else C["dim"], 18))
+        tip = "Stop counting down to it on the bar (B)" if on else "Count down to it on the bar (B)"
+        self.count_btn.setToolTip(tip + "\nOff: the bar shows your next event")
+        self.count_btn.setAccessibleName(tip.split(" (")[0])
+
+    def toggle_countdown(self):
+        """The meeting bar counts down to this event (in days, hours or minutes) instead of the next one, or back."""
+        agenda = self.grid.agenda
+        settings, key = agenda.calendar.store.settings, event_pin_key(self.info)
+        on = settings.get("meeting_bar_pin") != key
+        if on:
+            settings["meeting_bar_pin"] = key
+        else:
+            settings.pop("meeting_bar_pin", None)
+        agenda.calendar.store.save()
+        agenda.bar.update_meeting()
+        self._count_state()
+        self.say(self.count_btn, "On the bar" if on else "Bar shows your next event")
+
     def copy(self, text, button, word):
         """Copy, then say so in a small bubble under the icon for a moment."""
         QGuiApplication.clipboard().setText(text)
+        self.say(button, word)
+
+    def say(self, button, word):
+        self.tip_timer.stop()
+        self.show_bubble(button, f"✓  {word}")
+        self.bubble.timer.start(1300)
+
+    def show_bubble(self, button, text):
+        """A small bubble above the icon (below it at the top of the screen): its tip, or what a click did."""
         if self.bubble is None:
             self.bubble = HintBubble()
             self.bubble.timer = QTimer(self.bubble)
             self.bubble.timer.setSingleShot(True)
             self.bubble.timer.timeout.connect(self.bubble.hide)
-        self.bubble.setText(f"✓  {word}")
-        at = button.mapToGlobal(QPoint(button.width() // 2, button.height() + 4))
-        self.bubble.move(at.x() - self.bubble.width() // 2, at.y())
+        self.bubble.timer.stop()
+        self.bubble.setText(text)
+        top = button.mapToGlobal(QPoint(button.width() // 2, 0))
+        area = screen_for(self, top).availableGeometry()
+        y = top.y() - self.bubble.height() - 4
+        if y < area.top():
+            y = top.y() + button.height() + 4
+        x = max(area.left() + 2, min(top.x() - self.bubble.width() // 2, area.right() - self.bubble.width() - 2))
+        self.bubble.move(x, y)
         self.bubble.show()
+        self.bubble.raise_()
         apply_share_privacy(self.bubble)
-        self.bubble.timer.start(1300)
+
+    def _poll_tip(self):
+        """The icons' tips: shown by us after half a second over one, gone when the mouse leaves it."""
+        pos = QCursor.pos()
+        over = next((b for b in self.findChildren(QToolButton, "evIcon") if b.isVisible() and
+                     b.rect().contains(b.mapFromGlobal(pos))), None)             if self.isVisible() and TIPS["mode"] != "off" else None
+        if over is self.tip_for:
+            return
+        self.tip_for = over
+        self.tip_timer.stop()
+        if self.bubble is not None and not self.bubble.timer.isActive():   # a "Copied" stays its moment
+            self.bubble.hide()
+        if over is not None:
+            self.tip_timer.start()
+
+    def eventFilter(self, obj, event):
+        t = event.type()
+        if t == QEvent.ToolTip:
+            return True                         # ours replaces Qt's, so there are never two
+        if t == QEvent.MouseButtonPress and obj is self.tip_for:
+            self.tip_timer.stop()               # a click: no tip over what it says (tip_for stays, so no new one)
+            if self.bubble is not None and not self.bubble.timer.isActive():
+                self.bubble.hide()
+        return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
         if self.bubble is not None:
@@ -15594,7 +16221,8 @@ class EventDetails(QFrame):
             event.accept()
             return
         button = {Qt.Key_E: self.edit_btn, Qt.Key_Delete: self.delete_btn, Qt.Key_C: self.copy_btn,
-                  Qt.Key_L: self.link_btn, Qt.Key_O: self.open_btn, Qt.Key_J: self.join_btn}.get(key)
+                  Qt.Key_L: self.link_btn, Qt.Key_B: self.count_btn,
+                  Qt.Key_O: self.open_btn, Qt.Key_J: self.join_btn}.get(key)
         free = Qt.ShiftModifier | (Qt.ControlModifier if key == Qt.Key_C else Qt.NoModifier)   # Ctrl+C copies too
         if button is not None and not event.modifiers() & ~free:
             button.click()
@@ -15610,13 +16238,23 @@ class EventDetails(QFrame):
         self.move(x, y)
         self.show()
         apply_share_privacy(self)
-        if not self.testAttribute(Qt.WA_TransparentForMouseEvents):     # a hover preview never takes focus
+        if not self.hover and not self.testAttribute(Qt.WA_TransparentForMouseEvents):   # hover cards wait
             (self.join_btn or self).setFocus()
+
+    def changeEvent(self, event):
+        """A hover card you clicked into acts like the clicked card: a click elsewhere closes it."""
+        if self.hover and event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self.clicked_in = True
+            elif self.clicked_in and not QApplication.activePopupWidget():
+                QTimer.singleShot(0, self.close)
+        super().changeEvent(event)
 
 
 class EventPeek(QObject):
-    """The hover card of an event in the full calendar: it shows after half a second over the event, beside it (left
-    of it when there is no room on the right), and goes on leave, click, scroll or a key."""
+    """The hover card of an event in the full calendar: the whole event card, with its buttons, after half a second
+    over the event, beside it (left of it when there is no room on the right). The mouse can cross onto it and use
+    it; it goes a moment after the mouse is off both, or on a click, scroll or key in the calendar."""
 
     def __init__(self, owner, grid):
         super().__init__(owner)
@@ -15625,18 +16263,38 @@ class EventPeek(QObject):
         self.timer.setSingleShot(True)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self._show)
+        self.closer = QTimer(self)          # time to cross the gap onto the card
+        self.closer.setSingleShot(True)
+        self.closer.setInterval(350)
+        self.closer.timeout.connect(self._maybe_close)
 
     def aim(self, event=None, rect=None):
         """The mouse is now over `event`, drawn at `rect` in the owner, or over no event."""
+        if self.card is not None and self.card.isVisible() and self.card.clicked_in:
+            return                          # you clicked into it: it stays until a click elsewhere
         if self.target and event is self.target[0]:
+            self.closer.stop()
+            return
+        if event is None and self.card is not None:
+            self.closer.start()
             return
         self.hide()
         if event is not None:
             self.target = (event, rect)
             self.timer.start()
 
+    def _maybe_close(self):
+        c = self.card
+        if c is not None and c.isVisible() and (c.isActiveWindow() or c.editing or
+                                                c.frameGeometry().contains(QCursor.pos())):
+            if not c.isActiveWindow():
+                self.closer.start()         # still on it: look again
+            return
+        self.hide()
+
     def hide(self):
         self.timer.stop()
+        self.closer.stop()
         self.target = None
         if self.card is not None:
             self.card.close()
@@ -15647,7 +16305,7 @@ class EventPeek(QObject):
         if not self.target or not self.owner.isVisible() or QApplication.activePopupWidget():
             return
         event, rect = self.target
-        self.card = EventDetails(event, self.owner, self.grid, preview=True)
+        self.card = EventDetails(event, self.owner, self.grid, hover=True)
         self.card.adjustSize()
         at = self.owner.mapToGlobal(QPoint(int(rect.right()) + 6, int(rect.top())))
         if at.x() + self.card.width() > screen_for(self.owner, at).availableGeometry().right():
@@ -15977,7 +16635,7 @@ class AgendaGrid(QWidget):
 
     def leaveEvent(self, event):
         self.hovered = -1
-        self.peek.hide()
+        self.peek.aim()
         self.update()
         super().leaveEvent(event)
 
@@ -16138,7 +16796,7 @@ class AgendaDays(QWidget):
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
-        self.peek.hide()
+        self.peek.aim()
         super().leaveEvent(event)
 
     def hideEvent(self, event):
@@ -16481,6 +17139,7 @@ class CalendarAgenda(QWidget):
         self.day_offset = 0
         self._refresh_pending = False
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setProperty("keep_tips", True)             # mostly icon buttons: tips stay past the first week
         self.setMinimumSize(390, 300)
         self.setFocusPolicy(Qt.StrongFocus)
         crisp = QFont(self.font())
@@ -16553,6 +17212,18 @@ class CalendarAgenda(QWidget):
         self.minute = QTimer(self)
         self.minute.setInterval(60000)
         self.minute.timeout.connect(self.refresh_later)
+        QGuiApplication.instance().focusWindowChanged.connect(
+            lambda w: w is None and self.isVisible() and QTimer.singleShot(150, self._hide_if_outside))
+
+    def _hide_if_outside(self):
+        """A click in another app hides the calendar. Its own cards and dialogs (any window of ours) don't, and
+        the bar's click decides for itself. A held button waits: you may be dragging something onto it."""
+        if not self.isVisible() or QApplication.activeWindow() is not None or QApplication.activePopupWidget():
+            return
+        if mouse_button_down():
+            QTimer.singleShot(200, self._hide_if_outside)
+            return
+        self.hide()
 
     def apply_background(self):
         bg = meeting_bar_background(self.calendar.store.settings)
@@ -16619,6 +17290,8 @@ class CalendarAgenda(QWidget):
 
     def hideEvent(self, event):
         self.minute.stop()
+        self.grid.peek.hide()                   # its hover cards are windows of their own
+        self.days_strip.peek.hide()
         super().hideEvent(event)
 
     def keyPressEvent(self, event):
@@ -16758,7 +17431,14 @@ class CalendarAgenda(QWidget):
             self.loading.hide()
 
     def move_event(self, e, start, end):
-        self.calendar.move_event(e, start, end)
+        """A dragged event. A repeating one asks which ones move; Cancel leaves them all where they were."""
+        scope = "This event"
+        if e.get("series_id"):
+            scope = event_choice(self, f"Move {e['title']}? It repeats.",
+                                 ("This event", "This and following", "All events"))
+            if not scope:
+                return
+        self.calendar.move_event(e, start, end, scope)
         self._manual = True
         self.show_loading(f"Saving {e['title']}, {clock_text(start)} - {clock_text(end)}...", seconds=6)
 
@@ -16897,23 +17577,135 @@ def selfie_icon(color, size):
     return QIcon(pix)
 
 
+def eye_guide(w, h):
+    """Where draw_face_guide puts things on a w by h preview: the eye height, and how far from the middle each side
+    line ends (the face's gap) and starts."""
+    return h * 0.38, h * 0.17, h * 0.40         # eyes as in TimelapseView.EYES, so every photo lines up the same
+
+
+def guide_ink(pixmap, rect):
+    """(ink, edge) that read on this patch of the picture: white with a dark edge on a dark patch, near black with
+    a light edge on a light one. rect is in the pixmap's logical pixels."""
+    dpr = pixmap.devicePixelRatio()
+    area = QRect(int(rect.x() * dpr), int(rect.y() * dpr), max(1, int(rect.width() * dpr)),
+                 max(1, int(rect.height() * dpr))).intersected(pixmap.rect())
+    c = (pixmap.copy(area).toImage().scaled(1, 1, Qt.IgnoreAspectRatio, Qt.SmoothTransformation).pixelColor(0, 0)
+         if not area.isEmpty() else QColor(0, 0, 0))            # smooth scaling to one pixel averages the patch
+    if 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue() > 150:
+        return QColor(25, 25, 28, 235), QColor(255, 255, 255, 150)
+    return QColor(255, 255, 255, 225), QColor(0, 0, 0, 120)
+
+
+GUIDE_NEON = "#46e1ff"            # the eye lines' and the camera mark's glow
+
+
 def draw_face_guide(pixmap):
-    """Dashed head-and-shoulders outline on a preview, so daily photos line up for a timelapse. Preview only."""
+    """Two neon lines in from the sides at eye height, fading in from the edges and glowing brightest where they
+    end: the eyes go between the two glowing ends, the rest of the face follows. "Eyes on this line" sits above the
+    right one. Preview only, never in the photo. The core is white on a dark picture and deep teal on a light one,
+    so it always reads; the glow is the same on both."""
     w, h = pixmap.width() / pixmap.devicePixelRatio(), pixmap.height() / pixmap.devicePixelRatio()
     cx = w / 2
-    head = QRectF(cx - h * 0.18, h * 0.14, h * 0.36, h * 0.48)
-    shoulders = QRectF(cx - h * 0.52, h * 0.72, h * 1.04, h * 0.56)
+    eyes, gap, reach = eye_guide(w, h)
+    font = QFont()
+    font.setPixelSize(12)
+    font.setBold(True)
+    lines = [(QPointF(cx - side * reach, eyes), QPointF(cx - side * gap, eyes)) for side in (1, -1)]
+    inks = [guide_ink(pixmap, QRectF(min(a.x(), b.x()), eyes - 24, abs(b.x() - a.x()), 32))
+            for a, b in lines]                                      # read before painting on it
+    neon = QColor(GUIDE_NEON)
+
+    def fade(tail, tip, color, alpha):          # clear at the outer edge, full from a third of the way in
+        g = QLinearGradient(tail, tip)
+        for at, a in ((0.0, 0.0), (0.35, alpha), (1.0, alpha)):
+            c = QColor(color)
+            c.setAlphaF(a * color.alphaF())
+            g.setColorAt(at, c)
+        return QBrush(g)
+
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.Antialiasing)
-    for pen in (QPen(QColor(0, 0, 0, 110), 3.5), QPen(QColor(255, 255, 255, 230), 2, Qt.DashLine)):
-        if pen.style() == Qt.DashLine:
-            pen.setDashPattern([5, 4])
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawEllipse(head)
-        p.drawArc(shoulders, 0, 180 * 16)
+    p.setFont(font)
+    for (tail, tip), (ink, edge) in zip(lines, inks):
+        core = QColor(255, 255, 255, 240) if ink.lightness() > 128 else QColor(0, 88, 118)
+        for width, alpha in ((16, 0.10), (10, 0.18), (6, 0.35)):      # the glow: widest and faintest first
+            p.setPen(QPen(fade(tail, tip, neon, alpha), width, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(tail, tip)
+        p.setPen(QPen(fade(tail, tip, core, 1.0), 2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(tail, tip)
+        halo = QRadialGradient(tip, 10)         # the glowing end, where the eye goes
+        bright, clear = QColor(neon), QColor(neon)
+        bright.setAlphaF(0.85)
+        clear.setAlpha(0)
+        halo.setColorAt(0, bright)
+        halo.setColorAt(1, clear)
+        p.setPen(Qt.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(tip, 10, 10)
+        p.setBrush(core)
+        p.drawEllipse(tip, 2.6, 2.6)
+    ink, edge = inks[1]
+    spot = QPointF(cx + gap + 4, eyes - 12)
+    for color, nudge in ((edge, QPointF(1, 1)), (ink, QPointF())):
+        p.setPen(color)
+        p.drawText(spot + nudge, "Eyes on this line")
     p.end()
     return pixmap
+
+
+class CameraMark(Spotlight):
+    """Where the camera really is, outside the window: a pulsing neon halo on the top edge of the screen, at the
+    middle (where laptops, laptop stands and monitor-top webcams have it), with "Look here for eye contact". Shown
+    while the cursor is on the daily photo button. Click-through, on top, hidden from screen share (all from
+    Spotlight)."""
+    PAD = 0
+    SIZE = QSize(200, 58)
+    TEXT = "Look here for eye contact"
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k = self.pulse()
+        lens = QPointF(self.width() / 2, 9)
+        neon = QColor(GUIDE_NEON)
+        r = 26 + 8 * k
+        halo = QRadialGradient(QPointF(lens.x(), 0), r)
+        bright, clear = QColor(neon), QColor(neon)
+        bright.setAlphaF(0.55 + 0.35 * k)
+        clear.setAlpha(0)
+        halo.setColorAt(0, bright)
+        halo.setColorAt(1, clear)
+        p.setPen(Qt.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(QPointF(lens.x(), 0), r, r)
+        p.setPen(QPen(QColor(255, 255, 255, 235), 2))
+        p.setBrush(QColor(18, 18, 22, 235))
+        p.drawEllipse(lens, 5.5, 5.5)
+        font = QFont()
+        font.setPixelSize(12)
+        font.setBold(True)
+        p.setFont(font)
+        tw = QFontMetrics(font).horizontalAdvance(self.TEXT)
+        pill = QRectF(lens.x() - tw / 2 - 10, 26, tw + 20, 22)
+        p.setPen(QPen(neon, 1))
+        p.setBrush(QColor(18, 18, 22, 230))
+        p.drawRoundedRect(pill, 11, 11)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(pill, Qt.AlignCenter, self.TEXT)
+
+
+# three plain checks, in the order you make them
+PHOTO_TIPS = (("Eyes", "On the line, so photos line up"),
+              ("Look", "At the glow up top, for eye contact"),
+              ("Light", "Face the light, for a clear face"))
+
+
+def photo_tips_html():
+    rows = "".join(f"<tr><td style='color:#4cc38a; font-weight:600; padding:3px 8px 3px 0'>{n} {lead}</td>"
+                   f"<td style='padding:3px 0'>{text}</td></tr>" for n, (lead, text) in enumerate(PHOTO_TIPS, 1))
+    return (f"<div style='font-weight:600; font-size:13px'>For a better timelapse:</div>"
+            f"<table style='margin-top:4px'>{rows}</table>"
+            f"<div style='color:#b8b8bc; margin-top:4px'>Same time and place daily.</div>")
 
 
 class SnapToast(QWidget):
@@ -17034,24 +17826,32 @@ def camera_style():
 QWidget#mirrorRoot {{ background: {C['surface']}; }}
 QLabel#mirrorHeading {{ color: {C['text']}; font-size: 16px; font-weight: 700; }}
 QLabel#mirrorBlurb, QLabel#mirrorStatus, QLabel#mirrorDb, QLabel#timelapseHint {{ color: {C['dim']}; font-size: 12px; }}
-QLabel#mirrorCaption {{ color: {C['dim']}; font-size: 11px; }}
+QLabel#mirrorCaption {{ color: {C['dim']}; font-size: 12px; }}
+QToolButton#mirrorPill::menu-indicator {{ image: none; width: 0; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {C['surface_hi']}; }}
+QCalendarWidget QToolButton {{ color: {C['text']}; background: transparent; border: none; padding: 4px 6px; }}
+QCalendarWidget QToolButton:hover {{ background: {C['border']}; border-radius: 4px; }}
+QCalendarWidget QAbstractItemView {{ background: {C['field']}; color: {C['text']}; outline: none;
+    selection-background-color: {C['accent']}; selection-color: white; }}
+QCalendarWidget QAbstractItemView:disabled {{ color: {C['disabled']}; }}
+QLabel#mirrorTips {{ color: white; background: rgba(20, 20, 22, 215); border-radius: 10px; padding: 10px 12px;
+    font-size: 12px; }}
 QLabel#timelapseInfo {{ color: {C['text']}; font-size: 12px; font-weight: 600; }}
 QLabel#mirrorPrivate {{ color: {C['dim']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
     border-radius: 11px; padding: 2px 10px; font-size: 11px; font-weight: 600; }}
 QLabel#mirrorView {{ background: #111; color: {C['dim']}; border-radius: 12px; }}
 QFrame#mirrorCard {{ background: {C['field']}; border: 1px solid {C['border']}; border-radius: 10px; }}
-QToolButton#mirrorDevice {{ background: rgba(20, 20, 22, 170); border: 1px solid rgba(255, 255, 255, 46);
-    border-radius: 20px; padding: 0; min-width: 0; min-height: 0; }}
-QToolButton#mirrorDevice:hover {{ background: rgba(64, 64, 70, 220); }}
-QToolButton#mirrorDevice:!checked {{ background: {C['urgent']}; border-color: {C['urgent']}; }}
-QToolButton#mirrorPick {{ color: white; background: rgba(20, 20, 22, 170); border: 1px solid rgba(255, 255, 255, 46);
-    border-radius: 10px; padding: 0; min-width: 0; min-height: 0; font-size: 12px; }}
-QToolButton#mirrorPick:hover, QToolButton#mirrorPick:focus {{ background: rgba(64, 64, 70, 220); }}
+QFrame#mirrorSwitches {{ background: rgba(20, 20, 22, 140); border-radius: 9px; }}
+QLabel#mirrorSwitchName {{ color: {C['text']}; font-size: 12px; }}
+QFrame#mirrorSwitches QLabel {{ color: rgba(255, 255, 255, 200); font-size: 11px; }}
+QToolButton#mirrorPick {{ color: {C['dim']}; background: transparent; border: 1px solid transparent;
+    border-radius: 6px; padding: 0; min-width: 0; min-height: 0; font-size: 12px; }}
+QToolButton#mirrorPick:hover, QToolButton#mirrorPick:focus {{ color: {C['text']}; background: {C['surface_hi']};
+    border-color: {C['border']}; }}
 QToolButton#mirrorPick::menu-indicator {{ image: none; width: 0; }}
-QToolButton#mirrorTool {{ color: {C['dim']}; font-size: 11px; border-radius: 8px; padding: 5px 2px 4px 2px;
+QToolButton#mirrorTool {{ color: {C['dim']}; font-size: 12px; border-radius: 8px; padding: 5px 2px 4px 2px;
     min-width: 0; min-height: 0; }}
 QToolButton#mirrorTool:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
-QToolButton#mirrorTool:checked {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; }}
 QToolButton#mirrorPill {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
     border-radius: 13px; padding: 3px 10px; font-size: 12px; min-width: 0; min-height: 0; }}
 QToolButton#mirrorPill:hover {{ color: {C['text']}; background: {C['surface_hi']}; border-color: {C['faint']}; }}
@@ -17080,7 +17880,9 @@ QSlider::handle:horizontal:disabled {{ background: {C['disabled']}; }}
 
 
 class Shutter(QAbstractButton):
-    """The daily photo button, like a phone camera's: a ring around a white disc that dips when pressed."""
+    """The daily photo button, like a phone camera's: a ring around a white disc that dips when pressed.
+    hovered(bool) says when the cursor comes and goes (the photo tips show meanwhile)."""
+    hovered = Signal(bool)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -17093,10 +17895,12 @@ class Shutter(QAbstractButton):
 
     def enterEvent(self, event):
         self.update()
+        self.hovered.emit(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self.update()
+        self.hovered.emit(False)
         super().leaveEvent(event)
 
     def paintEvent(self, event):
@@ -17116,11 +17920,13 @@ class Shutter(QAbstractButton):
 
 class MirrorWindow(QWidget):
     """Camera check, from the meeting bar (it used to be called the hand mirror). Before a call: a live camera
-    preview (flipped, like a mirror) with round camera and mic switches on it, a mic meter in dB, and Record 5 s
-    to hear yourself back. Any day: the round shutter saves a daily photo, an instant-camera print with the date
-    and time, to parking_lot_data/snaps; the face guide (preview only) helps frame each day the same for a
-    timelapse. The window takes the camera's shape, so the preview fills it. The ▾ next to each switch picks the
-    camera, mic or speaker (the system default until you pick); all stop when it hides. The timelapse takes its place while open. Esc closes, T opens the timelapse."""
+    preview (flipped, like a mirror), a mic meter in dB, and Record 5 s to hear yourself back. Any day: the round
+    shutter saves a daily photo, an instant-camera print with the date and time, to parking_lot_data/snaps; the
+    eye lines (preview only, while the cursor is on the shutter) help frame each day the same for a timelapse.
+    Camera and Sound switches sit left of the shutter; Mirror photo in the preview's top right, shown while the mouse
+    is on the picture or Tab is on it. The window takes the camera's shape, so the preview
+    fills it. The ▾ next to Camera or Sound picks the camera, or the input (mic) and output (speaker); the system
+    default until you pick. All stop when it hides. The timelapse takes its place while open. Esc closes, T opens the timelapse."""
     RECORD_SECONDS = 5
 
     def __init__(self, store=None):
@@ -17131,6 +17937,7 @@ class MirrorWindow(QWidget):
         self.setObjectName("mirrorRoot")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(camera_style())
+        self.setFocusPolicy(Qt.ClickFocus)
         self.resize(520, 640)
         self.camera = self.session = self.sink = self.audio = self.audio_io = None
         self.audio_fmt = None
@@ -17175,11 +17982,29 @@ class MirrorWindow(QWidget):
         self.view.setMinimumSize(200, 150)
         v.addWidget(self.view, 1)
         self.toast = SnapToast(self.view)
-        self.camera_btn = self._device()
-        self.camera_pick = self._picker("camera", "Choose the camera")
-        self.mic_btn = self._device()
-        self.mic_pick = self._picker("mic", "Choose the mic and speaker")
-        self.view.installEventFilter(self)          # keeps the two switches at the preview's bottom centre
+        self.tips = QLabel(photo_tips_html(), self.view)
+        self.tips.setObjectName("mirrorTips")
+        self.tips.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.tips.hide()
+        self.cam_mark = CameraMark()                    # on screen at the real camera while the tips show
+        self.cam_mark.setParent(self, self.cam_mark.windowFlags())
+        self.tips.installEventFilter(self)
+        self.switches = QFrame(self.view)
+        self.switches.setObjectName("mirrorSwitches")
+        over = QGridLayout(self.switches)
+        over.setContentsMargins(8, 5, 6, 5)
+        over.setHorizontalSpacing(6)
+        over.setVerticalSpacing(3)
+        self.flip_box = self._switch(over, 0, "Mirror photo", "Save the daily photo flipped, the way you see "
+                                     "yourself here. Off saves it as the camera sees it.",
+                                     settings.get("mirror_flip", True), 0.8)
+        self.switches_fade = QGraphicsOpacityEffect(self.switches)     # like a video's controls: shown while the
+        self.switches_fade.setOpacity(0.0)                              # mouse is on the picture or Tab is on it
+        self.switches.setGraphicsEffect(self.switches_fade)
+        self._corner_on = [False, False]            # Tab is on the switch, the mouse is on the picture
+        self.flip_box.installEventFilter(self)
+        self.view.setMouseTracking(True)
+        self.view.installEventFilter(self)          # keeps the switches in the preview's top right
         card = QFrame(self)
         card.setObjectName("mirrorCard")
         sound = QHBoxLayout(card)
@@ -17211,22 +18036,25 @@ class MirrorWindow(QWidget):
         bar.setVerticalSpacing(2)
         bar.setColumnStretch(0, 1)
         bar.setColumnStretch(2, 1)
-        self.guide_box = self._tool("face", "Guide", "Show a dashed outline for your head and shoulders, so every "
-                                    "daily photo is framed the same. Only on the preview, never in the photo.",
-                                    bool(settings.get("mirror_guide", False)))
-        self.flip_box = self._tool("flip", "Mirror", "Save the photo flipped, the way you see yourself in the "
-                                   "preview", bool(settings.get("mirror_flip", True)))
+        left = QGridLayout()
+        left.setHorizontalSpacing(8)
+        left.setVerticalSpacing(6)
+        self.camera_btn = self._switch(left, 0, "Camera", "", True)
+        self.camera_pick = self._picker("camera", "Choose the camera")
+        self.mic_btn = self._switch(left, 1, "Sound", "", True)
+        self.mic_pick = self._picker("mic", "Choose the input (mic) and output (speaker)")
+        left.addWidget(self.camera_pick, 0, 2)
+        left.addWidget(self.mic_pick, 1, 2)
+        left.setColumnStretch(3, 1)
+        for b in (self.camera_btn, self.mic_btn):
+            b.toggled.connect(self._sync)
         self.timelapse_btn = self._tool("film", "Timelapse", "Play your daily photos as a timelapse (T)")
         self.folder_btn = self._tool("folder", "Folder", "Open the snaps folder with your daily photos")
-        left, right = QHBoxLayout(), QHBoxLayout()
-        for row, tools in ((left, (self.guide_box, self.flip_box)), (right, (self.timelapse_btn, self.folder_btn))):
-            row.setSpacing(4)
-            if row is right:
-                row.addStretch(1)
-            for b in tools:
-                row.addWidget(b)
-            if row is left:
-                row.addStretch(1)
+        right = QHBoxLayout()
+        right.setSpacing(4)
+        right.addStretch(1)
+        right.addWidget(self.timelapse_btn)
+        right.addWidget(self.folder_btn)
         bar.addLayout(left, 0, 0, 2, 1, Qt.AlignVCenter)
         self.photo_btn = Shutter(self)
         self.photo_btn.setToolTip("Save today's photo, with the date and time, to the snaps folder")
@@ -17244,35 +18072,38 @@ class MirrorWindow(QWidget):
         self.status.setWordWrap(True)
         v.addWidget(self.status)
         self.photo_btn.clicked.connect(self.take_photo)
+        self.photo_btn.hovered.connect(self._hover_tips)
         self.folder_btn.clicked.connect(self.open_folder)
         self.timelapse_btn.clicked.connect(self.open_timelapse)
         self.record_btn.clicked.connect(self.record)
         self.play_btn.clicked.connect(self.play_back)
-        self.guide_box.toggled.connect(self._set_guide)
         self.flip_box.toggled.connect(lambda on: self._save("mirror_flip", on))
         self._fitted = False
 
-    def _device(self):
-        """A round switch on the preview, like a call app's (its icon and text come from _sync)."""
-        b = QToolButton(self.view)
-        b.setObjectName("mirrorDevice")
-        b.setCheckable(True)
-        b.setChecked(True)
-        b.setFixedSize(40, 40)
-        b.setIconSize(QSize(20, 20))
-        b.setCursor(Qt.PointingHandCursor)
-        b.toggled.connect(self._sync)
+    def _switch(self, grid, row, name, tip, on, scale=1.0):
+        """A named on/off switch on a row of grid, green when on; the name is its label and accessible name.
+        Tab reaches it; a click leaves no focus ring."""
+        holder = grid.parentWidget() or self
+        b = ToggleSwitch(bool(on), holder, C["glimmer"], scale)
+        b.setFocusPolicy(Qt.TabFocus)
+        b.label = QLabel(name, holder)
+        b.label.setObjectName("mirrorSwitchName")
+        b.setAccessibleName(name)
+        for w in (b.label, b):
+            w.setToolTip(tip)
+        grid.addWidget(b.label, row, 0)
+        grid.addWidget(b, row, 1)
         return b
 
     def _picker(self, kind, tip):
         """The ▾ beside a switch: a menu of devices, rebuilt each time it opens (a headset may have just been
         plugged in). Tab reaches it; Space opens it."""
-        b = QToolButton(self.view)
+        b = QToolButton(self)
         b.setObjectName("mirrorPick")
         b.setText("▾")
         b.setToolTip(tip)
         b.setAccessibleName(tip)
-        b.setFixedSize(20, 28)
+        b.setFixedHeight(28)
         b.setCursor(Qt.PointingHandCursor)
         b.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(b)
@@ -17280,13 +18111,22 @@ class MirrorWindow(QWidget):
         b.setMenu(menu)
         return b
 
+    @staticmethod
+    def _name_picker(b, device):
+        """The device in use on its ▾, short: "Microphone Array (Realtek Audio)" reads "Microphone Array"."""
+        full = device.description()
+        name = full.split(" (")[0] or full
+        b.setText((name if len(name) <= 18 else name[:17].rstrip() + "…") + " ▾")     # by letters: same on any font
+        b.setToolTip(f"{b.accessibleName()}. Now: {full}")
+
     def _device_lists(self, kind):
         """(section title, settings key, devices, system default) for the camera menu or the mic menu."""
         from PySide6.QtMultimedia import QMediaDevices
         if kind == "camera":
             return [("Camera", "mirror_camera", QMediaDevices.videoInputs(), QMediaDevices.defaultVideoInput())]
-        return [("Microphone", "mirror_mic", QMediaDevices.audioInputs(), QMediaDevices.defaultAudioInput()),
-                ("Speaker", "mirror_speaker", QMediaDevices.audioOutputs(), QMediaDevices.defaultAudioOutput())]
+        return [("Input (mic)", "mirror_mic", QMediaDevices.audioInputs(), QMediaDevices.defaultAudioInput()),
+                ("Output (speaker)", "mirror_speaker", QMediaDevices.audioOutputs(),
+                 QMediaDevices.defaultAudioOutput())]
 
     def _chosen(self, key, devices, default):
         """The device saved under this key, or the system default (also when the saved one is unplugged)."""
@@ -17295,8 +18135,10 @@ class MirrorWindow(QWidget):
 
     def _fill_devices(self, menu, kind):
         menu.clear()
-        for title, key, devices, default in self._device_lists(kind):
-            menu.addSection(title)
+        for n, (title, key, devices, default) in enumerate(self._device_lists(kind)):
+            if n:
+                menu.addSeparator()
+            menu.addAction(title).setEnabled(False)     # a heading: Windows draws addSection() as a bare line
             chosen = self._chosen(key, devices, default)
             if not devices:
                 menu.addAction("None found").setEnabled(False)
@@ -17334,8 +18176,8 @@ class MirrorWindow(QWidget):
         b.setEnabled(False)
         return b
 
-    def _tool(self, kind, text, tip, checked=None):
-        """An icon over a word; a switch (checked given) turns green when on."""
+    def _tool(self, kind, text, tip):
+        """An icon over a word."""
         b = QToolButton(self)
         b.setObjectName("mirrorTool")
         b.setText(text)
@@ -17345,24 +18187,50 @@ class MirrorWindow(QWidget):
         b.setIconSize(QSize(20, 20))
         b.setFixedWidth(68)
         b.setCursor(Qt.PointingHandCursor)
-
-        def paint(on):
-            b.setIcon(line_icon(kind, C["glimmer"] if on else C["dim"], 20))
-        if checked is not None:
-            b.setCheckable(True)
-            b.setChecked(checked)
-            b.toggled.connect(paint)
-        paint(bool(checked))
+        b.setIcon(line_icon(kind, C["dim"], 20))
         return b
 
     def eventFilter(self, obj, event):
-        if obj is self.view and event.type() == QEvent.Resize:
-            x, y = (self.view.width() - 132) // 2, self.view.height() - 52
-            self.camera_btn.move(x, y)
-            self.camera_pick.move(x + 42, y + 6)
-            self.mic_btn.move(x + 70, y)
-            self.mic_pick.move(x + 112, y + 6)
+        t = event.type()
+        if obj is self.view and t == QEvent.Resize:
+            self.switches.adjustSize()
+            self.switches.move(self.view.width() - self.switches.width() - 10, 10)
+            self._place_tips()
+        elif (t in (QEvent.Enter, QEvent.Leave) and obj is self.view or
+              t in (QEvent.FocusIn, QEvent.FocusOut) and obj is self.flip_box):
+            self._corner_on[obj is self.view] = t in (QEvent.Enter, QEvent.FocusIn)
+            self.switches_fade.setOpacity(1.0 if any(self._corner_on) else 0.0)
+        elif obj is self.tips and t in (QEvent.Show, QEvent.Hide):
+            self.cam_mark.follow(self._camera_spot) if t == QEvent.Show else self.cam_mark.stop()
         return super().eventFilter(obj, event)
+
+    def _camera_spot(self):
+        """Where the camera mark goes: the top middle of the screen this window is on, where laptops, laptop stands and
+        monitor-top webcams have the camera."""
+        # ponytail: fixed spot; a webcam on another monitor works by moving the camera check to that monitor
+        g = screen_for(self, self.geometry().center()).geometry()
+        size = CameraMark.SIZE
+        return QRect(g.center().x() - size.width() // 2, g.top(), size.width(), size.height())
+
+    def _place_tips(self):
+        """The tips card at the preview's bottom left, over the shoulders: clear of the eye lines, the camera arrow
+        and the switches in the top right. Wrapped when the preview is narrow."""
+        self.tips.setWordWrap(False)
+        self.tips.adjustSize()
+        width = max(150, min(self.tips.width(), self.view.width() // 2 - 24))
+        self.tips.setWordWrap(True)
+        self.tips.resize(width, self.tips.heightForWidth(width))
+        self.tips.move(10, self.view.height() - self.tips.height() - 10)
+
+    def _hover_tips(self, on):
+        """Tips and the face guide only while the cursor is on the daily photo button and the camera runs."""
+        on = bool(on) and self.photo_btn.isEnabled()
+        if on != self.tips.isVisible():
+            if on:
+                self._place_tips()
+                self.tips.raise_()
+            self.tips.setVisible(on)
+            self._show_frame()
 
     def _settings(self):
         return self.store.settings if self.store else {}
@@ -17378,32 +18246,29 @@ class MirrorWindow(QWidget):
         return f.width() / f.height() if f is not None and f.height() else 16 / 9
 
     def _fit_window(self):
-        """Size the window so the preview has the camera's shape and fits the screen: no empty bands."""
+        """Size the window so the preview has the camera's shape and fits the screen (no empty bands), centred."""
         area = screen_for(self, self.geometry().center()).availableGeometry()
         ratio = self.aspect()
         for _ in range(2):                      # wrapped text changes the height with the width: settle twice
             self.layout().activate()
             extra_w, extra_h = self.width() - self.view.width(), self.height() - self.view.height()
             least = self.minimumSizeHint().width()          # the controls' width: the picture is never narrower
-            w = max(min(500, area.width() - extra_w - 60), least - extra_w)
-            h = min(round(w / ratio), area.height() - extra_h - 60)
+            w = max(min(860, int(area.width() * 0.6) - extra_w), least - extra_w)      # big, never full screen
+            h = min(round(w / ratio), int(area.height() * 0.88) - extra_h)
             self.resize(max(round(h * ratio) + extra_w, least), h + extra_h)
-
-    def _set_guide(self, on):
-        self._save("mirror_guide", on)
-        self._show_frame()
+        frame = self.frameGeometry()
+        frame.moveCenter(area.center())
+        self.move(frame.topLeft())
 
     def _sync(self):
         """Start or stop each device to match its switch."""
         cam, mic = self.camera_btn.isChecked(), self.mic_btn.isChecked()
         for b, kind, on in ((self.camera_btn, "camera", cam), (self.mic_btn, "mic", mic)):
-            name = kind.capitalize()
-            b.setText(f"{name} {'on' if on else 'off'}")
-            b.setAccessibleName(b.text())
-            b.setToolTip(f"Turn the {kind} {'off' if on else 'on'}")
-            b.setIcon(line_icon(kind if on else kind + "-off", "white", 20))
+            for w in (b, b.label):
+                w.setToolTip(f"Turn the {kind} {'off' if on else 'on'}")
         if cam and not self.camera:
             self._start_camera()
+            QTimer.singleShot(self.SLOW_START_MS, self._slow_start_note)
         elif not cam:
             self._stop_camera()
             self.view.setText("Camera off")
@@ -17413,13 +18278,20 @@ class MirrorWindow(QWidget):
             self._stop_mic()
         self.record_btn.setEnabled(self.audio_io is not None and self.recording is None)
 
+    SLOW_START_MS = 700
+    def _slow_start_note(self):
+        """Words only when the camera is slow to switch on: a quick start shows the picture with no message."""
+        if self.isVisible() and self.camera and self.last_frame is None and not self.view.text():
+            self.view.setText("Starting camera...")
+
     def _start_camera(self):
         from PySide6.QtMultimedia import QCamera, QMediaCaptureSession, QMediaDevices, QVideoSink
         device = self._chosen("mirror_camera", QMediaDevices.videoInputs(), QMediaDevices.defaultVideoInput())
         if device.isNull():
             self.view.setText("No camera found")
             return
-        self.view.setText("Starting camera...")
+        self._name_picker(self.camera_pick, device)
+        self.view.setText("")
         self.camera = QCamera(device, self)
         best = best_camera_format(device.videoFormats())
         if best is not None:
@@ -17448,7 +18320,7 @@ class MirrorWindow(QWidget):
         if self.last_frame is None:
             return
         pix = rounded_frame(self.last_frame, self.view.size(), self.view.devicePixelRatioF(), flip=True)
-        if self.guide_box.isChecked():
+        if self.tips.isVisible():               # the eye lines: only while the cursor is on the shutter
             draw_face_guide(pix)
         self.view.setPixmap(pix)
 
@@ -17460,6 +18332,7 @@ class MirrorWindow(QWidget):
         self.camera = self.sink = self.session = None
         self.last_frame = None
         self.photo_btn.setEnabled(False)
+        self.tips.hide()
 
     def _start_mic(self):
         from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
@@ -17467,6 +18340,7 @@ class MirrorWindow(QWidget):
         if device.isNull():
             self.status.setText("No mic found")
             return
+        self._name_picker(self.mic_pick, device)
         fmt = device.preferredFormat()
         kinds = {QAudioFormat.SampleFormat.UInt8: "B", QAudioFormat.SampleFormat.Int16: "h",
                  QAudioFormat.SampleFormat.Int32: "i", QAudioFormat.SampleFormat.Float: "f"}
@@ -17586,6 +18460,7 @@ class MirrorWindow(QWidget):
         saved = card.save(str(path), "JPG", 92)
         self.status.setText(f"Saved to snaps: {path.name}" if saved else "Couldn't save the photo.")
         if saved:
+            self._hover_tips(False)             # the print drops in where the tips were
             self.toast.play(card, when)
         return path if saved else None
 
@@ -17602,11 +18477,7 @@ class MirrorWindow(QWidget):
             self.timelapse.reload()
         if self.isVisible():
             self._away = True
-            area = screen_for(self, self.geometry().center()).availableGeometry()
-            g = self.timelapse.frameGeometry()
-            g.moveCenter(self.frameGeometry().center())
-            self.timelapse.move(max(area.left(), min(g.left(), area.right() - g.width())),
-                                max(area.top(), min(g.top(), area.bottom() - g.height())))
+            self.timelapse.setGeometry(self.geometry())     # same size and place as the camera check
             self.hide()
         self.timelapse.show()
         self.timelapse.raise_()
@@ -17622,12 +18493,23 @@ class MirrorWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         apply_share_privacy(self)
+        self.setFocus()
         self._fitted = False
         self._fit_window()
-        self._sync()
+        if self.camera_btn.isChecked() and not self.camera:
+            self.view.setText("")           # not last time's picture; a slow start gets a note (_slow_start_note)
+        self._painted = False           # devices start after the first paint: starting the camera blocks a moment
+                                        # (longest on the first open after a restart), and an unpainted window flashes
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._painted:
+            self._painted = True
+            QTimer.singleShot(0, lambda: self.isVisible() and self._sync())
 
     def hideEvent(self, event):
         self._stop_camera()
+        self.cam_mark.stop()
         self._stop_mic()
         self._stop_playback()
         super().hideEvent(event)
@@ -17751,12 +18633,13 @@ class TimelapseView(QWidget):
         super().__init__(parent)
         self.image = None
         self.mark = None
+        self.gain = 1.0
         self.progress = None
         self.setMinimumSize(240, 200)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-    def show_image(self, image, mark):
-        self.image, self.mark = image, mark
+    def show_image(self, image, mark, gain=1.0):
+        self.image, self.mark, self.gain = image, mark, gain
         self.update()
 
     def placement(self, size=None):
@@ -17776,8 +18659,17 @@ class TimelapseView(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         pic = print_picture(self.image)
         scale, origin = self.placement(size)
-        p.drawImage(QRectF(origin.x() + pic.left() * scale, origin.y() + pic.top() * scale,
-                           pic.width() * scale, pic.height() * scale), self.image, QRectF(pic))
+        target = QRectF(origin.x() + pic.left() * scale, origin.y() + pic.top() * scale,
+                        pic.width() * scale, pic.height() * scale)
+        p.drawImage(target, self.image, QRectF(pic))
+        if self.gain < 0.99:                    # darker: a black veil
+            p.fillRect(target, QColor(0, 0, 0, round(255 * (1 - self.gain))))
+        elif self.gain > 1.01:                  # lighter: add part of the picture onto itself
+            p.save()
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.setOpacity(self.gain - 1)
+            p.drawImage(target, self.image, QRectF(pic))
+            p.restore()
 
     def paintEvent(self, event):
         dpr = self.devicePixelRatioF()
@@ -17838,7 +18730,9 @@ class TimelapseWindow(QWidget):
         self.setStyleSheet(camera_style())
         self.resize(560, 660)
         self.recorder = self.preview = self.video_path = self.saved_to = None
-        self.paths = []
+        self.paths = self.all_paths = []
+        self.span = None                        # (from, to) QDates, or None for every photo
+        self.first_day = self.last_day = None   # the oldest and newest photo's day
         settings = store.settings if store else {}
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -17874,6 +18768,56 @@ class TimelapseWindow(QWidget):
         self.auto_box.toggled.connect(self.set_auto)
         top.addWidget(self.auto_box)
         v.addLayout(top)
+        dates = QHBoxLayout()
+        dates.setSpacing(6)
+        self.date_btns = {}
+        for word in ("From", "to"):
+            label = QLabel(word, page)
+            label.setObjectName("timelapseHint")
+            dates.addWidget(label)
+            b = QToolButton(page)               # one click anywhere opens a month; a click on a day picks it
+            b.setObjectName("mirrorPill")
+            b.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            b.setIcon(line_icon("calendar", C["text"], 14))
+            b.setIconSize(QSize(14, 14))
+            b.setPopupMode(QToolButton.InstantPopup)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setAccessibleName(f"{word.capitalize()} date")
+            b.setToolTip("Pick a day. Days with a photo are green." + (" (D)" if word == "From" else ""))
+            menu = QMenu(b)
+            cal = QCalendarWidget(menu)
+            cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+            plain, header = QTextCharFormat(), QTextCharFormat()
+            plain.setForeground(QColor(C["text"]))
+            header.setForeground(QColor(C["dim"]))
+            header.setBackground(QColor(C["field"]))
+            for weekend in (Qt.Saturday, Qt.Sunday):    # not red: only photo days stand out
+                cal.setWeekdayTextFormat(weekend, plain)
+            cal.setHeaderTextFormat(header)
+            holder = QWidgetAction(menu)
+            holder.setDefaultWidget(cal)
+            menu.addAction(holder)
+            for picked in (cal.clicked, cal.activated):        # a click, or arrows then Enter
+                picked.connect(lambda day, w=word, m=menu: (m.close(), self.set_date(w, day)))
+            menu.aboutToShow.connect(lambda c=cal, w=word: (c.setSelectedDate(self._span()[w == "to"]), c.setFocus()))
+            b.setMenu(menu)
+            b.calendar = cal
+            dates.addWidget(b)
+            self.date_btns[word] = b
+        dates.addStretch(1)
+        self.range_btns = []
+        for label, days in (("30 days", 30), ("1 year", 365), ("All", None)):
+            b = QToolButton(page)
+            b.setObjectName("mirrorPill")
+            b.setText(label)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip("All your photos" if days is None else f"The last {label}, up to your newest photo")
+            b.clicked.connect(lambda _=False, n=days: self.set_last(n))
+            dates.addWidget(b)
+            self.range_btns.append(b)
+        v.addLayout(dates)
         self.view = TimelapseView(page)
         self.view.clicked.connect(self.set_mark)
         v.addWidget(self.view, 1)
@@ -17905,12 +18849,13 @@ class TimelapseWindow(QWidget):
         speed.addWidget(speed_name)
         self.speed = QSlider(Qt.Horizontal, page)
         self.speed.setRange(1, 30)
-        self.speed.setFixedWidth(90)
+        self.speed.setMinimumWidth(40)          # shrinks so the timelapse fits the camera check's size
+        self.speed.setMaximumWidth(90)
         self.speed.setFocusPolicy(Qt.NoFocus)
         self.speed.setCursor(Qt.PointingHandCursor)
         self.speed.setAccessibleName("Speed, photos per second")
         self.speed.setToolTip("Photos per second (+ and -)")
-        self.speed.setValue(int(settings.get("timelapse_fps", 6)))
+        self.speed.setValue(int(settings.get("timelapse_fps", 4)))
         self.speed.valueChanged.connect(self.set_speed)
         speed.addWidget(self.speed)
         self.speed_label = QLabel("", page)
@@ -17928,7 +18873,10 @@ class TimelapseWindow(QWidget):
             middle.addWidget(b, 0, Qt.AlignVCenter)
         controls.addLayout(middle, 0, 1)
         right = QHBoxLayout()
+        right.setSpacing(8)
         right.addStretch(1)
+        self.delete_btn = self._round(page, "trash", "Delete this photo (Del)", self.delete_photo)
+        right.addWidget(self.delete_btn, 0, Qt.AlignVCenter)
         self.video_btn = QPushButton("Make video", page)
         self.video_btn.setObjectName("mirrorPrimary")
         self.video_btn.setIcon(line_icon("film", "white", 16))
@@ -18016,16 +18964,69 @@ class TimelapseWindow(QWidget):
 
     def reload(self):
         """Read the photo list and line-up marks again (a new photo may have been saved)."""
-        self.paths = sorted(self.folder.glob("snap-*.jpg"))      # dated names, so name order is date order
+        self.all_paths = sorted(self.folder.glob("snap-*.jpg"))      # dated names, so name order is date order
+        self.lights = {}                        # file name: mean grey 0 to 255, for light_gain()
         try:
             self.marks = json.loads((self.folder / "lineup.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             self.marks = {}
-        n = len(self.paths)
-        self.count.setText(f"{n} photo{'' if n == 1 else 's'}" if n else "")
+        days = sorted({self._date(p) for p in self.all_paths} - {None})
+        bold = QTextCharFormat()
+        bold.setFontWeight(QFont.Bold)
+        bold.setForeground(QColor(C["glimmer"]))
+        self.first_day, self.last_day = (days[0], days[-1]) if days else (None, None)
+        for b in self.date_btns.values():
+            b.calendar.setDateTextFormat(QDate(), QTextCharFormat())       # clears the old marks
+            for day in days:
+                b.calendar.setDateTextFormat(day, bold)
+            if days:
+                b.calendar.setDateRange(days[0], days[-1])
+        self._filter()
+
+    @staticmethod
+    def _date(path):
+        day = QDate.fromString(path.stem[5:15], "yyyy-MM-dd")
+        return day if day.isValid() else None
+
+    def _filter(self):
+        """Show only the photos From / to (all of them with no span), and the pickers to match."""
+        start, end = self._span()
+        self.paths = [p for p in self.all_paths if self.span is None or self._date(p) is None or
+                      start <= self._date(p) <= end]
+        for b, day in zip(self.date_btns.values(), (start, end)):
+            b.setText(day.toString("d MMM yyyy") if day else "No photos")
+        lit = next((b for b, days in zip(self.range_btns[::-1], (None, 365, 30)) if self.span == self._last(days)),
+                   None)                      # one lit button: All wins when a shorter one covers every photo too
+        for b in self.range_btns:
+            b.setCheckable(True)
+            b.setChecked(b is lit)
+        n, total = len(self.paths), len(self.all_paths)
+        self.count.setText("" if not total else f"{n} photo{'' if n == 1 else 's'}" if n == total else
+                           f"{n} of {total} photos")
         self.position.setRange(0, max(0, n - 1))
         self._set_enabled()
         self.show_photo(self.position.value())
+
+    def _span(self):
+        return self.span or (self.first_day, self.last_day)
+
+    def _last(self, days):
+        """The span for the last so many days up to the newest photo; None (all) when that already covers them."""
+        if days is None or self.last_day is None or self.last_day.addDays(-days + 1) <= self.first_day:
+            return None
+        return self.last_day.addDays(-days + 1), self.last_day
+
+    def set_last(self, days):
+        self.span = self._last(days)
+        self._filter()
+
+    def set_date(self, word, day):
+        """A day picked for From or to; the other end follows so From is never after to."""
+        start, end = self._span()
+        start, end = (day, max(end, day)) if word == "From" else (min(start, day), day)
+        self.span = None if (start, end) == (self.first_day, self.last_day) else (start, end)
+        self.position.setValue(0)
+        self._filter()
 
     def _set_enabled(self):
         """Controls work with two photos or more, and not while a video is being made."""
@@ -18033,6 +19034,9 @@ class TimelapseWindow(QWidget):
         for w in (self.play_btn, self.prev_btn, self.next_btn, self.video_btn, self.position, self.speed,
                   self.auto_box):
             w.setEnabled(idle)
+        for w in list(self.date_btns.values()) + self.range_btns:      # a span is never changed mid-video
+            w.setEnabled(self.recorder is None and len(self.all_paths) > 1)
+        self.delete_btn.setEnabled(self.recorder is None and bool(self.paths))
 
     def show_photo(self, index):
         if not self.paths:
@@ -18042,23 +19046,38 @@ class TimelapseWindow(QWidget):
             return
         index = max(0, min(index, len(self.paths) - 1))
         image = QImage(str(self.paths[index]))              # ponytail: read from disk each frame
-        self.view.show_image(image, self.mark_for(index, image))
+        self.view.show_image(image, self.mark_for(index, image), self.light_gain(index, image))
         self._update_info()
+
+    def light_gain(self, index, image=None):
+        """How much to brighten (over 1) or darken this photo so its light matches the photos around it (3 each
+        side), which takes out most day to day flicker and keeps slow changes like seasons. 0.7 to 1.4.
+        ponytail: whole-picture brightness only; colour and per-area light stay as shot."""
+        def light(i, img=None):
+            name = self.paths[i].name
+            if name not in self.lights:
+                img = img if img is not None else QImage(str(self.paths[i]))
+                rows = gray_rows(img.copy(print_picture(img)), 24) if not img.isNull() else [b"\x80"]
+                self.lights[name] = max(1.0, sum(map(sum, rows)) / sum(map(len, rows)))
+            return self.lights[name]
+        near = range(max(0, index - 3), min(len(self.paths), index + 4))
+        target = sum(light(i) for i in near) / len(near)
+        return max(0.7, min(1.4, target / light(index, image)))
 
     def mark_for(self, index, image):
         """This photo's line-up mark: yours, else found from the first photo when that's on, else None (the
         face guide's spot). Yours keeps the found face size. Found marks are kept, so each photo is matched once."""
         name = self.paths[index].name
         hand = self.marks.get(name)
-        if not self.auto_box.isChecked() or index == 0:
+        first = self.all_paths[0].name          # the very first photo, so a date span never re-matches
+        if not self.auto_box.isChecked() or name == first:
             return hand
-        first = self.paths[0].name
         ref = f"{first} {self.marks.get(first)} v{LINE_UP}"     # a new first photo, its mark or matcher: again
         found = self.marks.get("auto")
         if not isinstance(found, dict) or found.get("ref") != ref:
             found = self.marks["auto"] = {"ref": ref, "marks": {}}
         if name not in found["marks"]:
-            first_image = QImage(str(self.paths[0]))
+            first_image = QImage(str(self.all_paths[0]))
             found["marks"][name] = line_up(first_image, self.marks.get(first) or default_mark(first_image), image)
             self._save_marks()
         return hand[:2] + found["marks"][name][2:] if hand else found["marks"][name]
@@ -18085,10 +19104,10 @@ class TimelapseWindow(QWidget):
         path = self.paths[index]
         self.info.setText(f"{index + 1} of {len(self.paths)} · {self._day(path)}")
         self.hint.setText("Playing." if self.timer.isActive() else
-                          "Lined up by you. Click between your eyes to move it." if path.name in self.marks else
-                          "Lined up automatically. Click between your eyes to fix it." if
-                          self.auto_box.isChecked() and index > 0 else
-                          "Paused. Click between your eyes to line it up.")
+                          ("Lined up by you. Click between your eyes to move it." if path.name in self.marks else
+                           "Lined up automatically. Click between your eyes to fix it." if
+                           self.auto_box.isChecked() and path != self.all_paths[0] else
+                           "Paused. Click between your eyes to line it up.") + " Use \u2190 \u2192 to see each photo.")
 
     @staticmethod
     def _day(path):
@@ -18121,6 +19140,25 @@ class TimelapseWindow(QWidget):
         """Next photo; playing loops around at the end."""
         if self.paths:
             self.position.setValue((self.position.value() + delta) % len(self.paths))
+
+    def delete_photo(self):
+        """Move the photo on screen to snaps/deleted (never a hard delete); the next one takes its place."""
+        if not self.paths or self.recorder is not None:
+            return
+        if self.timer.isActive():
+            self.toggle()
+        index = self.position.value()
+        path = self.paths[index]
+        trash = self.folder / "deleted"
+        try:
+            trash.mkdir(exist_ok=True)
+            os.replace(path, trash / path.name)
+        except OSError:
+            self.hint.setText("Couldn't move that photo. Is it open in another app?")
+            return
+        self.reload()
+        self.position.setValue(min(index, max(0, len(self.paths) - 1)))
+        self.hint.setText(f"Moved {self._day(path)} to the deleted folder in snaps.")
 
     def set_mark(self, point):
         if self.timer.isActive() or not self.paths or self.recorder is not None:
@@ -18173,7 +19211,7 @@ class TimelapseWindow(QWidget):
             while self.recorder is not None and self._video_frame < len(self.paths):
                 i = self._video_frame
                 image = QImage(str(self.paths[i]))
-                self.view.show_image(image, self.mark_for(i, image))
+                self.view.show_image(image, self.mark_for(i, image), self.light_gain(i, image))
                 frame = QImage(size, QImage.Format_ARGB32)
                 p = QPainter(frame)
                 self.view.render_photo(p, size)
@@ -18312,8 +19350,12 @@ class TimelapseWindow(QWidget):
             self.close()
         elif self.recorder is not None:
             super().keyPressEvent(event)              # making a video: the photos stay put
+        elif key == Qt.Key_D and self.date_btns["From"].isEnabled():
+            self.date_btns["From"].showMenu()          # arrows move, Enter picks, Esc shuts it
         elif key == Qt.Key_Space:
             self.toggle()
+        elif key == Qt.Key_Delete:
+            self.delete_photo()
         elif key in (Qt.Key_Left, Qt.Key_Right):
             if self.timer.isActive():
                 self.toggle()
@@ -18349,6 +19391,7 @@ class MeetingBadge(QWidget):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.bubble, self.calendar = bubble, calendar
         self.current_event = None
+        self.overlaps, self.join_event = [], None   # events sharing time with it; the one Join opens
         self.fullscreen_suppressed = False
         self.open_settings = lambda: None
         self.restart = None                # set by main(): the menu's fail-safe Restart / update
@@ -18754,7 +19797,7 @@ class MeetingBadge(QWidget):
         a line saying a click opens the 3 day calendar, so the card never hides what the click does."""
         if self.current_event is None:
             return
-        self.card = EventDetails(self.current_event, preview=True)
+        self.card = EventDetails(self.current_event, preview=True, also=self.overlaps)
         self.card.adjustSize()
         top = self.mapToGlobal(QPoint(0, 0))
         area = screen_for(self, top).availableGeometry()
@@ -18884,8 +19927,9 @@ class MeetingBadge(QWidget):
         menu.exec(event.globalPos())
 
     def open_event(self):
-        if self.current_event and self.current_event.get("url"):
-            QDesktopServices.openUrl(QUrl(self.current_event["url"]))
+        e = self.join_event or self.current_event
+        if e and e.get("url"):
+            QDesktopServices.openUrl(QUrl(e["url"]))
 
     def add_event(self):
         self._set_hint("")
@@ -18897,6 +19941,21 @@ class MeetingBadge(QWidget):
         self.mirror.show()
         self.mirror.raise_()
         self.mirror.activateWindow()
+
+    def warm_up(self):
+        """Once, at idle after startup: the slow first-time setup, so the 3 day view and camera check open at once.
+        Only lists the devices; the camera and mic stay off (no light) until the camera check opens."""
+        if self.mirror is None:
+            self.mirror = MirrorWindow(self.calendar.store)
+        for w in (self.agenda, self.mirror):
+            w.ensurePolished()
+            w.winId()                          # the window itself, made now instead of on the first open
+        try:
+            from PySide6.QtMultimedia import QMediaDevices
+            QMediaDevices.videoInputs()        # the first lookup starts the media backend: a few hundred ms
+            QMediaDevices.audioInputs()
+        except Exception as e:
+            log_error(f"camera warm-up: {e}")
 
     def set_fullscreen_suppressed(self, suppressed):
         if self.fullscreen_suppressed != suppressed:
@@ -18942,15 +20001,22 @@ class MeetingBadge(QWidget):
         self.detail.setStyleSheet(f"color: {dim}; font-size: {font_size}px;")
         QTimer.singleShot(0, self._update_title)
 
-    def _set_stripe(self, color):
-        tone = QColor(color)
-        if getattr(self, "_stripe_color", None) == tone.name():
+    def _set_stripe(self, *colors):
+        """One color, shaded; events at the same time split it into a band of each one's color."""
+        tones = [QColor(c) for c in colors]
+        key = ",".join(t.name() for t in tones)
+        if getattr(self, "_stripe_color", None) == key:
             return
-        self._stripe_color = tone.name()
+        self._stripe_color = key
+        if len(tones) == 1:
+            t = tones[0]
+            stops = f"stop:0 {t.lighter(125).name()}, stop:0.5 {t.name()}, stop:1 {t.darker(120).name()}"
+        else:
+            n = len(tones)
+            stops = ", ".join(f"stop:{i / n:.3f} {t.name()}, stop:{(i + 1) / n - 0.001:.3f} {t.name()}"
+                              for i, t in enumerate(tones))
         self.source_color.setStyleSheet(
-            "QFrame { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            f"stop:0 {tone.lighter(125).name()}, stop:0.5 {tone.name()}, "
-            f"stop:1 {tone.darker(120).name()}); border-radius: 2px; }}")
+            f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, {stops}); border-radius: 2px; }}")
 
     def _update_title(self):
         margins = self.row.contentsMargins()
@@ -18959,7 +20025,17 @@ class MeetingBadge(QWidget):
         title = (self.current_event["title"] if self.current_event else
                  "Checking calendar..." if self.calendar.busy else
                  ("No upcoming events" if self.width() >= 260 else "No events"))
-        self.title.setText(self.title.fontMetrics().elidedText(title, Qt.ElideRight, width))
+        fm = self.title.fontMetrics()
+        others = self.overlaps if self.current_event else []
+        if len(others) == 1:                # both names, each cut to a fair share when they don't fit
+            second, sep = others[0]["title"], " & "
+            first = fm.elidedText(title, Qt.ElideRight, max(width // 2, width - fm.horizontalAdvance(sep + second)))
+            text = first + sep + fm.elidedText(second, Qt.ElideRight,
+                                               max(1, width - fm.horizontalAdvance(first + sep)))
+        else:
+            more = f" & {len(others)} more" if others else ""      # never cut off
+            text = fm.elidedText(title, Qt.ElideRight, max(1, width - fm.horizontalAdvance(more))) + more
+        self.title.setText(text)
         detail = getattr(self, "_detail_text", "")
         self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.ElideRight, width))
         if self.hover_box.isVisible():
@@ -19053,14 +20129,18 @@ class MeetingBadge(QWidget):
             return
         now = datetime.now().astimezone()
         future = [e for e in self.calendar.events if e["start"] > now and e["end"] > now]
-        current = next((e for e in self.calendar.events if e["start"] <= now < e["end"]), None)
-        self.current_event = current or (future[0] if future else None)
+        pin = self.calendar.store.settings.get("meeting_bar_pin")      # a countdown turned on from an event card
+        pinned = next((e for e in self.calendar.events + list(getattr(self.calendar, "all_day", []))
+                       if e["end"] > now and event_pin_key(e) == pin), None) if pin else None
+        self.current_event, self.overlaps = bar_events(self.calendar.events, now, pinned)
         if self.current_event:
             e = self.current_event
-            color = calendar_color(e.get("event_color"), calendar_color(e.get("calendar_color")))
-            self._set_stripe(color)
+            self._set_stripe(*(event_color(x) for x in [e] + self.overlaps[:3]))
             minutes = math.ceil((e["start"] - now).total_seconds() / 60)
-            if minutes <= 0:
+            if e.get("all_day"):
+                day = f"{e['start']:%a %b} {e['start'].day}"
+                detail = f"Today · {day}" if minutes <= 0 else f"In {short_span(minutes * 60)} · {day}"
+            elif minutes <= 0:
                 left = max(0, math.ceil((e["end"] - now).total_seconds() / 60))
                 detail = f"Now · {left} min left"
             elif minutes < 60:
@@ -19070,21 +20150,28 @@ class MeetingBadge(QWidget):
             else:
                 detail = f"In {short_span(minutes * 60)} · {e['start']:%a %I:%M %p}".replace(" 0", " ")
             self._detail_text = detail
-            joinable = bool(e.get("join") and e.get("url"))
+            self.join_event = next((x for x in [e] + self.overlaps if x.get("join") and x.get("url")), None)
+            joinable = self.join_event is not None   # this one's call, else the call of one at the same time
             self._arrange_buttons(joinable)
             self.join_btn.setVisible(joinable)
             if joinable:
-                provider = call_provider(e["url"])
-                self.join_btn.setToolTip(f"Join {e['title']}" + (f" on {provider}" if provider else ""))
+                provider = call_provider(self.join_event["url"])
+                self.join_btn.setToolTip(f"Join {self.join_event['title']}" + (f" on {provider}" if provider else ""))
             self._update_title()
+            also = "".join(f"  {x['title']}, {clock_text(x['start'])} to {clock_text(x['end'])}\n"
+                           for x in self.overlaps)
             self.setToolTip(f"{e['title']}\n{e.get('calendar_name') or 'Calendar'} · "
-                            f"{e['start']:%a, %b %d at %I:%M %p}\nClick to open your 3 day calendar. Drag to move the bar.")
+                            f"{e['start']:%a, %b %d at %I:%M %p}\n" +
+                            (f"Also at this time:\n{also}" if also else "") +
+                            ("Counting down to this one. Turn it off on its card (B).\n" if e is pinned else "") +
+                            "Click to open your 3 day calendar. Drag to move the bar.")
             urgent = any(0 < (next_event["start"] - now).total_seconds() <=
                          calendar_flow_minutes(self.calendar.store.settings) * 60 for next_event in future)
             preview = time.monotonic() < self._glint_preview_until
             self.glint.set_active(urgent or preview, meeting_glint_style(self.calendar.store.settings))
         else:
             self._set_stripe(C["dim"])
+            self.join_event = None
             self._detail_text = "Loading next event" if self.calendar.busy else "Calendar is clear for now"
             self._arrange_buttons(False)
             self.join_btn.hide()
@@ -19604,6 +20691,7 @@ class SettingsWindow(QWidget):
         self.big.setStyleSheet(f"background: {C['field']}; border: 1px solid {C['border']}; border-radius: 12px;")
         cap = QLabel("This is your circle.\nPick a color, a shape and a size.")
         cap.setObjectName("rowDesc")
+        cap.setWordWrap(True)
         top.addWidget(self.big)
         top.addSpacing(12)
         top.addWidget(cap, 1)
@@ -19829,6 +20917,13 @@ class SettingsWindow(QWidget):
         gl.addWidget(pause_box)                # the choices get their own line, so none gets squeezed
         self._row(gl, "Try one", "See what a check-in looks like.",
                   self._button("Check in now", lambda: ctx.nudges.check_in(preview=True)))
+        gl = self._group(v, "When you're back")
+        self._toggle(gl, "Greet me when I'm back", "Good morning, afternoon, evening or night owl after 3 hours "
+                     "away. At most once per part of the day.", "greet_on", True)
+        self._toggle(gl, "Ask for today's snap", "The first greeting of the day offers the camera for a daily "
+                     "photo. Not if you took one already.", "snap_ask_on", True)
+        self._row(gl, "Try one", "See what a greeting looks like.",
+                  self._button("Greet me now", lambda: ctx.nudges.greet(preview=True)))
         gl = self._group(v, "When focus starts")
         self._toggle(gl, "A few words of boost", "A short line from the circle as a round begins.", "boost_on", True)
         gl = self._group(v, "Little touches")
@@ -20160,17 +21255,22 @@ class SettingsWindow(QWidget):
 
     def page_about(self):
         ctx = self.ctx
-        area, v = self._page(APP_NAME, APP_TAGLINE)
+        area, v = self._page(APP_NAME, f"Version {APP_VERSION}  \u00B7  {APP_TAGLINE}")
+        web = lambda url: lambda _=False: QDesktopServices.openUrl(QUrl(url))
         gl = self._group(v)
-        self._row(gl, f"Version {APP_VERSION}", f"Made by {APP_AUTHOR}.")
-        self._row(gl, "Why I made it", APP_STORY)
-        for label, desc, url in (("GitHub", "Source code, updates and bug reports.", GITHUB_URL),
-                                ("Buy me a coffee", "PTT is free. A coffee helps me keep building it.", COFFEE_URL)):
-            b = self._button("Open" if url else "Coming soon", lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
-            b.setEnabled(bool(url))
-            self._row(gl, label, desc, b)
-        self._row(gl, "Updates", "Gets the newest version from GitHub, then restarts. Your notes stay.",
-                  self._button("Restart / update", ctx.restart))
+        self._row(gl, f"Made by {APP_AUTHOR}", AUTHOR_URL.split("//")[1].rstrip("/"),
+                  self._button("Visit", web(AUTHOR_URL)))
+        self._row(gl, "GitHub", "Source code, updates and bug reports.", self._button("Open", web(GITHUB_URL)))
+        story = QLabel(APP_STORY)
+        story.setObjectName("story")
+        story.setWordWrap(True)
+        self._group(v, "Why I made it").addWidget(story)
+        self._row(self._group(v, "Support the developer \u2615"), "Buy me a coffee",
+                  "This app is free. If it helped you, a coffee keeps it going. Thanks! \U0001F49B",
+                  self._button("Open", web(COFFEE_URL)))
+        gl = self._group(v, "Updates")
+        self._row(gl, f"Version {APP_VERSION}", "Restart / update gets the newest version from GitHub. "
+                  "Your notes stay.", self._button("Restart / update", ctx.restart))
         self._toggle(gl, "Update automatically", "Checks GitHub at start and every 6 hours. Installs when you're "
                      "away and no focus round is running, then says what changed. Your notes stay.",
                      "auto_update", True)
@@ -20178,9 +21278,44 @@ class SettingsWindow(QWidget):
         self._row(gl, "Open source parts", "Built with Qt for Python and pynput, both under the LGPL v3.",
                   self._button("View", lambda _=False: QDesktopServices.openUrl(QUrl.fromLocalFile(str(notices))))
                   if FROZEN and notices.exists() else None)
-        log = self._fold_group(v, "Update log", "What changed in each version")
-        for version, day, lines in CHANGELOG:
-            self._row(log, f"{version}  \u00B7  {day}", "\n".join(lines))
+        log = self._group(v, "Update log")
+        self.log_heads = []
+        for n, (version, day, title, lines) in enumerate(CHANGELOG):      # the newest open, older ones folded
+            head = QPushButton()
+            head.setObjectName("logHead")
+            head.setCheckable(True)
+            head.setCursor(Qt.PointingHandCursor)
+            head.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            head.setAccessibleName(f"Version {version}")
+            date = QLabel(day)
+            date.setObjectName("rowDesc")
+            top = QHBoxLayout()
+            top.addWidget(head, 1)
+            top.addWidget(date)
+            log.addLayout(top)
+            body = QWidget()
+            bl = QVBoxLayout(body)
+            bl.setContentsMargins(4, 0, 0, 6)
+            bl.setSpacing(2)
+            for line in lines:             # one label per point: a long one wraps under its own text, not the dot
+                row = QHBoxLayout()
+                dot = QLabel("\u2022")
+                dot.setObjectName("logLine")
+                text = QLabel(line)
+                text.setObjectName("logLine")
+                text.setWordWrap(True)
+                row.addWidget(dot, 0, Qt.AlignTop)
+                row.addWidget(text, 1)
+                bl.addLayout(row)
+            log.addWidget(body)            # parented before it can be shown
+
+            def fold(on, head=head, body=body, text=f"{version}  \u00B7  {title}"):
+                head.setText(("\u25BE  " if on else "\u25B8  ") + text)
+                body.setVisible(on)
+            head.toggled.connect(fold)
+            fold(False)
+            head.setChecked(n == 0)
+            self.log_heads.append(head)
         v.addStretch(1)
         return area
 
@@ -20283,7 +21418,7 @@ def whats_new(seen, version=APP_VERSION):
     None) or when nothing is new."""
     if seen is None or _version(seen) >= _version(version):
         return None
-    lines = next((lines for v, _, lines in CHANGELOG if v == version), ())
+    lines = next((lines for v, _, _, lines in CHANGELOG if v == version), ())
     return " ".join((f"Updated to {version}.",) + tuple(lines[:2]))
 
 
@@ -20758,7 +21893,8 @@ def main():
     def panel_hotkey():
         """A showing question takes the list hotkey first, so it can be answered from the keyboard."""
         sp = holder.get("speech")
-        for w in (sp if sp is not None and sp._btns else None, session_card):
+        reminder = next(iter(app._note_alarms.active.values()), None)
+        for w in (sp if sp is not None and sp._btns else None, reminder, session_card):
             if w is not None and w.isVisible() and not w.isActiveWindow():
                 w.take_keys()
                 return
@@ -20920,6 +22056,7 @@ def main():
     bubble.refresh_shape()
     meeting_badge = MeetingBadge(bubble, calendar)
     holder["meeting_badge"] = meeting_badge
+    QTimer.singleShot(3000, lambda: (panel.winId(), meeting_badge.warm_up()))   # first opens stay instant too
     meeting_badge.open_settings = lambda: open_settings("calendar")
     meeting_badge.restart = restart
     guard = PresenceGuard(bubble, lambda: [panel, quickbox, confetti, session_card] +
@@ -20941,6 +22078,16 @@ def main():
     nudges.wants_focus.connect(lambda minutes: timer.start(minutes, "focus"))
     nudges.wants_break.connect(lambda minutes: timer.start(minutes, "break"))
     nudges.wants_more_break.connect(timer.extend_break)
+
+    def take_snap():
+        """The greeting's "Take snap": the camera check, with a hint the first 3 times."""
+        meeting_badge.open_mirror()
+        shown = int(setting("snap_guided", 0))
+        if shown < 3:
+            meeting_badge.mirror.status.setText("Point at the round button to line up your eyes. Look at the glow "
+                                                "up top for eye contact, then press it.")
+            set_setting("snap_guided", shown + 1)
+    nudges.wants_snap.connect(take_snap)
     timer.started.connect(lambda: setattr(nudges, "break_parts", []) if timer.kind == "focus" else None)
     def tag_ok():
         """Ask what a round is for unless it's off or now is a bad moment (a meeting on the calendar is fine:
@@ -21167,7 +22314,7 @@ def main():
     def show_news():
         if speech.isVisible() or (holder.get("onboarding") and holder["onboarding"].isVisible()):
             return QTimer.singleShot(60000, show_news)
-        speech.say(bubble.geometry(), news, [("Update log", "update_log"), ("OK", "update_ok")], 20000, "\U0001f389")
+        speech.say(bubble.geometry(), news, [("Update log", "update_log")], 20000, "\U0001f389")
     speech.closed.connect(lambda key: key == "update_log" and open_settings("about"))
     if news:
         said.pop("--update=updated")
