@@ -102,6 +102,10 @@ After a long stretch at the computer without a focus round (every 45 minutes by 
 
 It stays quiet during calls (mic or camera in use), full screen and presentations. Pause it for an hour, the rest of the day, or until you turn it back on.
 
+### Block distracting apps
+
+Pick the apps that pull you away (WhatsApp, Teams, Outlook, anything) from a searchable list in Settings > **App blocker** (web apps like ChatGPT or Gemini have their own tick under their browser). Block them for 25, 50 or 90 minutes or any length (the no-entry button at the top of the list, or Settings), or turn on **Block in every focus session**. Open one anyway and it closes again with a soft low tone and a word from the cloud, every time you try, with **Pause** (open that app for a few minutes), **Stop for this app** or **Stop for all**. Need just one app for a moment? Press and hold the cloud and unblock it for 3, 5 or 10 minutes. When the block ends, the cloud says your apps are unblocked and how many times you reached for them (after a focus session it's on the end card). Calls are safe: nothing closes while your mic or camera is in use.
+
 ### Water and eye breaks
 
 While you use the laptop, a tiny character peeks out from behind the cloud: a look into the distance every 20 minutes, a sip of water every 40. Never in the first 3 minutes of a focus round. Settings can limit it to focus rounds only. It ducks back after a few seconds and clicks pass through it. Optional: a soft sound first, and a 20 second look-away countdown.
@@ -116,13 +120,13 @@ Add `20m`, `in 1 hour` or `at 3:30 pm` to any note, or press the bell. When it's
 
 ### Background noise and music
 
-The **♫** button plays brown, pink or white noise made by the app (no sound files), at three volumes, or only during focus. Under **Music**, open the music folder, drop in your own songs (mp3, m4a, wav, flac, ogg and more), and pick one to play on repeat.
+The **music note** button plays brown, pink or white noise made by the app (no sound files), at three volumes, or only during focus. Under **Music**, open the music folder, drop in your own songs (mp3, m4a, wav, flac, ogg and more), and pick one to play on repeat.
 
 <img src="docs/sound.png" width="718" alt="Noise menu with the Music submenu open">
 
 ### Copy your patterns for AI
 
-Every thought you park is logged on your PC: when it came, what the timer was doing, and what you did with it. The **✨** button copies the last 7 days, 30 days or everything as a ready-made prompt for any AI chat: the app first counts your rhythm (best hours and weekdays, streaks, late nights, rounds in a row, the minute thoughts start pulling, what you keep snoozing), and the prompt asks for patterns you probably haven't noticed, each in a small table, ending with a few small changes to try next week. Paste the answer back in to keep it.
+Every thought you park is logged on your PC: when it came, what the timer was doing, and what you did with it. The **sparkle** button copies the last 7 days, 30 days or everything as a ready-made prompt for any AI chat: the app first counts your rhythm (best hours and weekdays, streaks, late nights, rounds in a row, the minute thoughts start pulling, what you keep snoozing), and the prompt asks for patterns you probably haven't noticed, each in a small table, ending with a few small changes to try next week. Paste the answer back in to keep it.
 
 <img src="docs/ai.png" width="642" alt="The AI menu: copy last 7 days, 30 days, everything, and saved analyses">
 
@@ -132,7 +136,7 @@ Every thought you park is logged on your PC: when it came, what the timer was do
 
 ### Make it yours
 
-System, Light or Dark theme (System follows Windows). The cloud starts white with the time left on its outline; pick its color, shape (thought cloud, circle, squircle and more) and size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy.
+System, Light or Dark theme (System follows Windows). The cloud starts white with the time left on its outline; pick its color, shape (thought cloud, circle, squircle and more) and size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy. **Your stats** is a report of how you use it: a heatmap of your days, when you focus best, what became of your thoughts, your records and streaks, counted on your PC only.
 
 <img src="docs/settings-appearance.png" width="800" alt="Settings, Appearance page">
 
@@ -140,13 +144,14 @@ System, Light or Dark theme (System follows Windows). The cloud starts white wit
 
 | To | Do this |
 |---|---|
-| Park a thought | `Ctrl+Alt+P`, type, `Enter`. Or scribble the mouse up and down over the cloud. |
+| Park a thought | `Ctrl+Alt+P`, type, `Enter`. Or scribble the mouse up and down over the cloud. `Alt+R` while typing adds a reminder. |
 | See your list | Click the cloud, `Ctrl+Alt+L`, or scribble left and right over the cloud. |
 | Deal with a thought | **Done**, **Later** or **Let go**. Undo with `Ctrl+Z`. |
 | Start a focus round | **Focus** in the list. |
 | Park a file, image or link | Drag it onto the cloud, or `Ctrl+V` a screenshot in the quick note. |
 | Use a parked file | Drag it out of the note, or hover it and click copy. |
 | Copy a note into a message | Hover it and click the copy icon, or select it and press `Ctrl+C`. |
+| Block apps for a while | The no-entry button at the top of the full list (the time left counts down above it while blocking), or right-click the cloud > **Block apps**. Pick which ones in Settings > **App blocker**. Press and hold the cloud to unblock one for a few minutes. |
 | Get help | **?** in the list: how it works and the welcome tour. |
 | Settings, timer, nap, quit | Right-click the cloud. |
 
@@ -176,7 +181,7 @@ Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, in case yo
 
 ## Questions
 
-**Is it free?** Yes. MIT license. If it helps you, you can [buy me a coffee](https://buymeacoffee.com/gmiqbal).
+**Is it free?** Yes. MIT license. If it helps you, you can [buy me a coffee](https://buymeacoffee.com/gmiqbal). Once you use it regularly, it may show your stats with a coffee ask; **Don't ask again** turns that off.
 
 **Mac or Linux?** Not supported yet. The core runs from source there, but screen-share hiding, focus handling and the quiet rules for check-ins are Windows only.
 

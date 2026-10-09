@@ -84,8 +84,13 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.6"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.6", "9 Oct 2026", "Block distracting apps, see your stats", ("App blocker: pick apps from a list and block them for a while or in every focus session.",
+                           "Web apps like ChatGPT get their own tick under their browser. Select all and Deselect all.",
+                           "Open a blocked app anyway: Pause it for a few minutes, or stop the block for it or for all.",
+                           "Alt+R while typing a note adds a reminder.",
+                           "Settings > Your stats: a heatmap of your days, when you focus best, what became of your thoughts and your records.")),
     ("1.5.5", "8 Oct 2026", "Reminders that wait, a calmer camera check", ("Reminders and check-ins wait until you pause typing, so a keypress never answers them.",
                            "Reminder card: Soon, Today and Tomorrow picks, a More snooze menu, and the note's name opens it.",
                            "Two meetings at once? The bar shows both and Join opens the one with the call.",
@@ -337,6 +342,223 @@ def foreground_app():
         return (app, title[:120]) if app != "unknown" or title else None
     except Exception:
         return None
+
+
+# Never closed by the app blocker, whatever is picked: Windows itself, shells, shared runtimes and us.
+BLOCK_NEVER = {"explorer", "python", "pythonw", "py", "parkthatthought", "parkthatthought-setup",
+               "applicationframehost", "dwm", "csrss", "svchost", "winlogon", "wininit", "services", "lsass", "sihost",
+               "ctfmon", "taskmgr", "searchhost", "searchapp", "startmenuexperiencehost", "shellexperiencehost",
+               "runtimebroker", "conhost", "textinputhost", "lockapp", "systemsettings", "msedgewebview2", "widgets",
+               "smartscreen", "securityhealthsystray", "fontdrvhost", "audiodg", "dllhost", "taskhostw", "werfault",
+               "cmd", "powershell", "pwsh", "windowsterminal", "openconsole", "system", "registry", "smss"}
+APP_NICE = {"ms-teams": "Teams", "teams": "Teams", "olk": "Outlook", "outlook": "Outlook", "whatsapp": "WhatsApp",
+            "msedge": "Edge", "chrome": "Chrome", "firefox": "Firefox", "discord": "Discord", "slack": "Slack",
+            "telegram": "Telegram", "spotify": "Spotify", "steam": "Steam", "code": "VS Code", "winword": "Word",
+            "excel": "Excel", "powerpnt": "PowerPoint", "onenote": "OneNote", "zoom": "Zoom", "signal": "Signal",
+            "messenger": "Messenger", "notion": "Notion", "obsidian": "Obsidian", "brave": "Brave", "opera": "Opera"}
+
+
+def app_nice(exe):
+    """'ms-teams' -> 'Teams', 'whatsapp.root' -> 'WhatsApp', 'zotero' -> 'Zotero'."""
+    exe = str(exe).lower()
+    if exe.startswith("pwa:"):                   # an installed web app, picked on its own
+        return (_PWA_CACHE or installed_pwas()).get(exe[4:], ("Web app", ""))[0]
+    return APP_NICE.get(exe) or APP_NICE.get(exe.split(".")[0]) or exe[:1].upper() + exe[1:]
+
+
+def block_pick_for(exe, picks):
+    """The picked name this process belongs to: 'whatsapp' covers whatsapp.exe and whatsapp.root.exe."""
+    if exe in BLOCK_NEVER:
+        return None
+    return next((p for p in picks if exe == p or exe.startswith(p + ".")), None)
+
+
+def _proc_path(k, pid):
+    import ctypes
+    k.OpenProcess.restype = ctypes.c_void_p
+    h = k.OpenProcess(0x1000, False, pid)                # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        path, size = ctypes.create_unicode_buffer(1024), ctypes.c_ulong(1024)
+        return path.value if k.QueryFullProcessImageNameW(ctypes.c_void_p(h), 0, path, ctypes.byref(size)) else None
+    finally:
+        k.CloseHandle(ctypes.c_void_p(h))
+
+
+def running_apps():
+    """{pid: (exe, path)} of every process we may read, exe lowercased without .exe. Windows only.
+    ponytail: a full scan each call (~10 ms for 300 processes); cache by pid if the blocker's sweep ever shows up."""
+    if not IS_WIN:
+        return {}
+    try:
+        import ctypes
+        k, ps = ctypes.windll.kernel32, ctypes.windll.psapi
+        pids, got = (ctypes.c_ulong * 4096)(), ctypes.c_ulong()
+        if not ps.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(got)):
+            return {}
+        out, me = {}, os.getpid()
+        for pid in pids[:got.value // 4]:
+            if pid and pid != me:
+                path = _proc_path(k, pid)
+                if path:
+                    out[pid] = (os.path.splitext(os.path.basename(path))[0].lower(), path)
+        return out
+    except Exception:
+        return {}
+
+
+def kill_processes(pids):
+    """Close these processes at once (like Task Manager's End task). Returns how many closed. Windows only."""
+    if not IS_WIN:
+        return 0
+    n = 0
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.OpenProcess.restype = ctypes.c_void_p
+        for pid in pids:
+            h = k.OpenProcess(0x0001, False, pid)          # PROCESS_TERMINATE
+            if h:
+                n += bool(k.TerminateProcess(ctypes.c_void_p(h), 1))
+                k.CloseHandle(ctypes.c_void_p(h))
+    except Exception as e:
+        log_error(f"app blocker could not close an app: {e}")
+    return n
+
+
+def windowed_apps():
+    """{exe: window title} of apps with a visible window right now, for the blocker's app list. Windows only."""
+    if not IS_WIN:
+        return {}
+    try:
+        import ctypes
+        u, k = ctypes.windll.user32, ctypes.windll.kernel32
+        out = {}
+        proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def each(hwnd, _):
+            if u.IsWindowVisible(ctypes.c_void_p(hwnd)) and not u.GetWindow(ctypes.c_void_p(hwnd), 4):  # no owner
+                buf = ctypes.create_unicode_buffer(256)
+                u.GetWindowTextW(ctypes.c_void_p(hwnd), buf, 256)
+                pid = ctypes.c_ulong()
+                u.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+                path = buf.value.strip() and pid.value != os.getpid() and _proc_path(k, pid.value)
+                if path:
+                    exe = os.path.splitext(os.path.basename(path))[0].lower()
+                    if exe not in BLOCK_NEVER:
+                        out.setdefault(exe, buf.value.strip()[:80])
+            return True
+        u.EnumWindows(proc(each), 0)
+        return out
+    except Exception:
+        return {}
+
+
+_PWA_CACHE = {}
+
+
+def installed_pwas():
+    """{app id: (name, browser exe)} of web apps installed from Chrome, Edge or Brave: their Start menu shortcuts
+    carry --app-id. Windows only."""
+    if not IS_WIN:
+        return {}
+    out = {}
+    root = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
+    try:
+        dirs = [root] + [e.path for e in os.scandir(root) if e.is_dir()]
+    except OSError:
+        return {}
+    for d in dirs:
+        try:
+            lnks = [e.path for e in os.scandir(d) if e.name.lower().endswith(".lnk")]
+        except OSError:
+            continue
+        for path in lnks:
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read(65536)
+            except OSError:
+                continue
+            text = raw.decode("utf-16-le", "ignore") + raw[1:].decode("utf-16-le", "ignore") + raw.decode("latin-1")
+            m = re.search(r"--app-id=([a-p]{32})", text)
+            if m and m.group(1) not in out:
+                low = text.lower()
+                out[m.group(1)] = (os.path.splitext(os.path.basename(path))[0][:60],
+                                   "brave" if "brave" in low else "msedge" if "msedge" in low else "chrome")
+    _PWA_CACHE.clear()
+    _PWA_CACHE.update(out)
+    return out
+
+
+def _window_aumid(hwnd):
+    """The window's AppUserModelID ("Chrome._crx_<app id>" for a Chrome web app), or ""."""
+    import ctypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("a", ctypes.c_ulong), ("b", ctypes.c_ushort), ("c", ctypes.c_ushort), ("d", ctypes.c_ubyte * 8)]
+
+    class PKEY(ctypes.Structure):
+        _fields_ = [("fmtid", GUID), ("pid", ctypes.c_ulong)]
+
+    class PROPVARIANT(ctypes.Structure):
+        _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
+                    ("p", ctypes.c_void_p), ("p2", ctypes.c_void_p)]
+
+    ole, sh = ctypes.windll.ole32, ctypes.windll.shell32
+
+    def guid(text):
+        g = GUID()
+        ole.CLSIDFromString(ctypes.c_wchar_p("{" + text + "}"), ctypes.byref(g))
+        return g
+    iid, key = guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), PKEY(guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5)
+    ps = ctypes.c_void_p()
+    if sh.SHGetPropertyStoreForWindow(ctypes.c_void_p(hwnd), ctypes.byref(iid), ctypes.byref(ps)) != 0 or not ps:
+        return ""
+    vt = ctypes.cast(ctypes.cast(ps, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    get = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(PKEY), ctypes.POINTER(PROPVARIANT))(vt[5])
+    release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt[2])
+    pv, out = PROPVARIANT(), ""
+    if get(ps, ctypes.byref(key), ctypes.byref(pv)) == 0 and pv.vt == 31:      # VT_LPWSTR
+        out = ctypes.wstring_at(pv.p)
+    ole.PropVariantClear(ctypes.byref(pv))
+    release(ps)
+    return out
+
+
+def pwa_windows():
+    """{hwnd: app id} of open web app windows. They run inside the browser's process, so the blocker closes their
+    windows instead. Windows only."""
+    if not IS_WIN:
+        return {}
+    try:
+        import ctypes
+        u, k = ctypes.windll.user32, ctypes.windll.kernel32
+        out = {}
+        proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def each(hwnd, _):
+            if u.IsWindowVisible(ctypes.c_void_p(hwnd)) and not u.GetWindow(ctypes.c_void_p(hwnd), 4):
+                pid = ctypes.c_ulong()
+                u.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+                path = _proc_path(k, pid.value) or ""
+                if os.path.splitext(os.path.basename(path))[0].lower() in ("chrome", "msedge", "brave"):
+                    m = re.search(r"_crx_([a-p]{32})", _window_aumid(hwnd))
+                    if m:
+                        out[hwnd] = m.group(1)
+            return True
+        u.EnumWindows(proc(each), 0)
+        return out
+    except Exception:
+        return {}
+
+
+def close_windows(hwnds):
+    """Ask these windows to close (like their X button). Windows only."""
+    if not IS_WIN:
+        return 0
+    import ctypes
+    return sum(bool(ctypes.windll.user32.PostMessageW(ctypes.c_void_p(h), 0x0010, 0, 0)) for h in hwnds)  # WM_CLOSE
 
 
 class FocusReturn:
@@ -1176,12 +1398,12 @@ def tips_on():
 
 class TipGate(QObject):
     """App-wide: swallows hover tooltips once you know your way around (after the first week, by default). A
-    window with the "keep_tips" property (the meeting bar: icons only) keeps them unless tips are set to Off."""
+    widget or window with the "keep_tips" property (icon-only buttons: the meeting bar, the list header) keeps them,
+    even with tips Off: on an icon-only button the tip is its name."""
 
     def eventFilter(self, obj, e):
         if e.type() == QEvent.ToolTip and not tips_on():
-            keep = (TIPS["mode"] != "off" and isinstance(obj, QWidget) and
-                    bool(obj.window().property("keep_tips")))
+            keep = isinstance(obj, QWidget) and bool(obj.property("keep_tips") or obj.window().property("keep_tips"))
             return not keep
         return False
 
@@ -1281,6 +1503,8 @@ QToolButton#morePill {{ background: {C['surface_hi']}; color: {C['dim']}; border
     border-radius: 10px; padding: 2px 10px; font-size: 11px; }}
 QToolButton#morePill:hover {{ color: {C['text']}; border: 1px solid {C['faint']}; background: {C['surface']}; }}
 QFrame#toast {{ background: {C['toast']}; border: 1px solid {C['toast_border']}; border-radius: 15px; }}
+QToolButton#toastClose {{ background: transparent; border: none; border-radius: 9px; padding: 3px; }}
+QToolButton#toastClose:hover {{ background: {C['accent_soft']}; }}
 QLabel#toastText {{ color: {C['text']}; font-size: 12px; background: transparent; }}
 QToolButton#toastUndo {{ color: {C['undo']}; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 10px;
     border: 1px solid transparent; background: transparent; }}
@@ -1360,8 +1584,11 @@ QToolButton#copy {{ background: {C['accent']}; color: white; font-weight: bold; 
 QToolButton#section {{ color: {C['dim']}; font-size: 12px; font-weight: 600; padding: 4px 2px; }}
 QToolButton#link {{ color: {C['faint']}; font-size: 11px; }}
 QToolButton#link:hover {{ color: {C['text']}; background: transparent; }}
-QToolButton#help, QToolButton#addTab {{ font-size: 16px; color: {C['dim']}; border-radius: 6px; }}
-QToolButton#help:hover, QToolButton#addTab:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
+QToolButton#help {{ font-size: 16px; color: {C['dim']}; border-radius: 6px; }}
+QToolButton#help:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
+QToolButton#headBtn {{ border: none; border-radius: 8px; background: transparent; }}
+QToolButton#headBtn:hover, QToolButton#headBtn:focus {{ background: {C['surface_hi']}; }}
+QToolButton#headBtn:pressed {{ background: {C['border']}; }}
 QToolButton#send {{ color: white; background: {C['accent']}; border: none; border-radius: 11px; padding: 3px 12px;
     font-size: 12px; font-weight: 600; }}
 QToolButton#send:hover {{ background: #b8465a; }}
@@ -2185,7 +2412,7 @@ def thought_rows(store):
                                   "dist_ever": False, "urgent_ever": False, "later": False,
                                   "glimmer_ever": False, "antiglimmer_ever": False, "idea_ever": False,
                                   "itch_acted_count": 0, "itch_acted_minutes": 0,
-                                  "music": None, "flags_ever": [], "reminder_snoozes": 0,
+                                  "music": None, "flags_ever": [], "reminder_snoozes": 0, "reminders_rang": 0,
                                   "outcome": "open", "resolved_at": ""})
         kind = ev.get("event")
         if kind == "captured":
@@ -2249,6 +2476,7 @@ def thought_rows(store):
             r["outcome"] = "abandoned"
         elif kind == "reminder":
             r["reminder_snoozes"] += str(ev.get("answer", "")).startswith("snooze")
+            r["reminders_rang"] += 1
     # current state wins for thoughts that still exist
     for l in store.lists:
         for t in l["tasks"]:
@@ -2272,6 +2500,181 @@ def thought_rows(store):
             if not t["done"]:
                 r.update(outcome="later" if t.get("later") else "open", resolved_at="")
     return list(rows.values())
+
+
+def usage_stats(store, today=None):
+    """Your use of the app so far, counted on this PC from the thought and focus logs (nothing leaves it), for
+    Settings > Your stats and the coffee card. One dict: totals, per-day / per-hour / per-weekday focus, outcomes,
+    flags, records, where focus went, and "features" (the parts you've used)."""
+    def when(iso):
+        try:
+            return datetime.fromisoformat(str(iso)).replace(tzinfo=None)
+        except Exception:
+            return None
+    num = lambda v: v if isinstance(v, (int, float)) and v > 0 else 0
+    mins = lambda x: num(x.get("focused_min"))
+    today = today or datetime.now().date()
+    rows = thought_rows(store)
+    sessions = read_jsonl(FOCUS_LOG)
+    focus = sorted(((when(x.get("start")), x) for x in sessions
+                    if x.get("kind", "focus") == "focus" and when(x.get("start"))), key=lambda p: p[0])
+    caps = sorted(((when(r["captured_at"]), r) for r in rows if when(r["captured_at"])), key=lambda p: p[0])
+    stamps = [t for t, _r in caps] + [when(x.get("start") or x.get("end")) for x in sessions]
+    dates = sorted({t.date() for t in stamps if t})
+
+    day_focus, day_thoughts, hours, week = {}, {}, [0.0] * 24, [0.0] * 7
+    for t, x in focus:
+        day_focus[t.date()] = day_focus.get(t.date(), 0) + mins(x)
+        hours[t.hour] += mins(x)
+        week[t.weekday()] += mins(x)
+    for c, _r in caps:
+        day_thoughts[c.date()] = day_thoughts.get(c.date(), 0) + 1
+    fdates = sorted(d for d, m in day_focus.items() if m)
+    best = run = 0
+    for a, b in zip([None] + fdates, fdates):
+        run = run + 1 if a and (b - a).days == 1 else 1
+        best = max(best, run)
+    cur, d = 0, today if today in day_focus else today - timedelta(days=1)     # today isn't over yet
+    while day_focus.get(d):
+        cur, d = cur + 1, d - timedelta(days=1)
+
+    chains, prev_end = [], None                  # stretches: rounds 20 min or less apart
+    for t, x in focus:
+        if prev_end and 0 <= (t - prev_end).total_seconds() <= 20 * 60:
+            chains[-1].append((t, x))
+        else:
+            chains.append([(t, x)])
+        prev_end = when(x.get("end")) or t
+    stretch = max(chains, key=lambda c: (len(c), sum(mins(x) for _t, x in c))) if chains else []
+    longest = max(focus, key=lambda p: mins(p[1])) if focus else None
+    big_day = max(day_focus.items(), key=lambda kv: kv[1]) if day_focus else None
+    busy_day = max(day_thoughts.items(), key=lambda kv: kv[1]) if day_thoughts else None
+
+    outcomes = {}
+    for r in rows:
+        o = "done" if r["outcome"] == "cleared" else r["outcome"]
+        outcomes[o] = outcomes.get(o, 0) + 1
+    to_done = [(when(r["resolved_at"]) - c).total_seconds() / 3600 for c, r in caps
+               if r["outcome"] in ("done", "cleared") and when(r["resolved_at"]) and when(r["resolved_at"]) >= c]
+    ever = dict(urge="urge_ever", distraction="dist_ever", urgent="urgent_ever", glimmer="glimmer_ever",
+                antiglimmer="antiglimmer_ever", idea="idea_ever")
+    flags = [(icon, word, n) for key, icon, word, _tip in FLAG_DEFS
+             if (n := sum(1 for r in rows if key in r["flags_ever"] or r.get(ever.get(key, ""))))]
+    in_focus = sum(1 for _c, r in caps if timer_state_of(r["focus"]) in ("focus", "paused"))
+
+    purposes, names, apps = {}, {}, {}
+    for _t, x in focus:
+        on = str(x.get("on") or "").strip()
+        if on:
+            names.setdefault(on.lower(), on)
+            purposes[on.lower()] = purposes.get(on.lower(), 0) + mins(x)
+        for a in x.get("apps") or []:
+            if isinstance(a, dict) and a.get("app"):
+                nice = app_nice(a["app"])
+                apps[nice] = apps.get(nice, 0) + num(a.get("min"))
+    top = lambda d, n=4: sorted(((k, v) for k, v in d.items() if v >= 1), key=lambda kv: -kv[1])[:n]
+
+    checkins = [x for x in sessions if x.get("kind") == "checkin"]
+    breaks = [x for x in sessions if x.get("kind") == "break"]
+    blocks = [x for x in sessions if x.get("kind") == "block"]
+    try:
+        photos = sum(1 for _ in SNAP_DIR.glob("snap-*.jpg"))
+    except OSError:
+        photos = 0
+    focus_min = sum(mins(x) for _t, x in focus)
+    st = dict(
+        first=dates[0] if dates else None, days=len(dates), today=today,
+        parked=len(rows), done=outcomes.get("done", 0), let_go=outcomes.get("let go", 0), outcomes=outcomes,
+        to_done_h=_median(to_done) if to_done else None, flags=flags, in_focus=in_focus,
+        per_focus_hour=in_focus / (focus_min / 60) if focus_min >= 60 else None,
+        busy_day=busy_day, day_focus=day_focus, day_thoughts=day_thoughts, hours=hours, week=week,
+        focus_n=len(focus), focus_min=focus_min, finished=sum(1 for _t, x in focus if x.get("completed")),
+        streak=best, streak_now=cur,
+        longest=(mins(longest[1]), longest[0].date()) if longest else None,
+        stretch=(len(stretch), sum(mins(x) for _t, x in stretch), stretch[0][0].date()) if stretch else None,
+        big_day=big_day, purposes=[(names[k], v) for k, v in top(purposes)], apps=top(apps),
+        checkins=sum(1 for x in checkins if x.get("response") not in (None, "", "timeout", "snooze", "dismiss")),
+        checkins_all=len(checkins), reminders=sum(r["reminders_rang"] for r in rows),
+        snoozes=sum(r["reminder_snoozes"] for r in rows),
+        breaks=len(breaks), break_min=sum(mins(x) for x in breaks),
+        stretched=sum(1 for x in sessions if x.get("kind") == "break_extension"),
+        blocks=len(blocks), photos=photos,
+        caught=sum(int(m.group(1)) for x in blocks if (m := re.search(r"caught (\d+) time", str(x.get("note"))))),
+        itches=sum(r["itch_acted_count"] for r in rows))
+    s = store.settings
+    calendar = s.get("google_calendar_auth") or s.get("google_calendar_feeds") or s.get("google_calendar_feed")
+    st["parts"] = [(name, bool(used)) for name, used in (
+        ("Parking", st["parked"]), ("Focus", st["focus_n"]), ("Check-ins", st["checkins"]),
+        ("Reminders", st["reminders"]), ("App blocker", st["blocks"]), ("Daily photo", photos),
+        ("Flags", flags), ("Calendar", calendar))]
+    st["features"] = [name for name, used in st["parts"] if used]
+    return st
+
+
+def fmt_minutes(m):
+    """45 -> '45 min', 90 -> '1.5 h', 3100 -> '52 h'."""
+    return f"{round(m)} min" if m < 60 else f"{m / 60:.1f} h".replace(".0 h", " h") if m < 600 else f"{round(m / 60)} h"
+
+
+def fmt_day(d, today=None):
+    today = today or datetime.now().date()
+    return f"{d:%b} {d.day}" + (f", {d.year}" if d.year != today.year else "")
+
+
+USAGE_PERSONAS = ((0, 5, "Night owl", "\U0001F989"), (5, 9, "Early bird", "\U0001F426"),
+                  (9, 12, "Morning person", "☀️"), (12, 17, "Afternoon closer", "\U0001F324️"),
+                  (17, 21, "Evening grinder", "\U0001F306"), (21, 24, "Night owl", "\U0001F989"))
+
+
+def usage_persona(st):
+    """(emoji, name, line) from when most of your focus happens, or None under an hour of focus."""
+    if st["focus_min"] < 60:
+        return None
+    a, b, name, emoji = max(USAGE_PERSONAS, key=lambda p: sum(st["hours"][p[0]:p[1]]))
+    share = round(100 * sum(st["hours"][a:b]) / st["focus_min"])
+    return emoji, name, f"{share}% of your focus starts between {a:02d}:00 and {b % 24:02d}:00"
+
+
+def usage_headline(st):
+    if not st["days"]:
+        return "Nothing counted yet. Park a thought or start a focus round and it shows up here."
+    return (f"since {fmt_day(st['first'], st['today'])}  ·  {len(st['features'])} of {len(st['parts'])} "
+            f"parts in use")
+
+
+def usage_highlights(st):
+    """Short lines worth bragging about, best first."""
+    out = []
+    if st["streak"] > 1:
+        out.append(("\U0001F525", f"{st['streak']} focus days in a row, your best"
+                    + (f". On a {st['streak_now']} day run now." if st["streak_now"] > 1 else ".")))
+    if st["longest"] and st["longest"][0] >= 15:
+        out.append(("⏱️", f"Longest round: {fmt_minutes(st['longest'][0])} on {fmt_day(st['longest'][1])}"))
+    if st["big_day"] and st["big_day"][1] >= 60:
+        out.append(("\U0001F3C6", f"Biggest focus day: {fmt_minutes(st['big_day'][1])} on {fmt_day(st['big_day'][0])}"))
+    if st["let_go"]:
+        out.append(("\U0001F343", f"{st['let_go']} {'thought' if st['let_go'] == 1 else 'thoughts'} let go, "
+                    "no action needed"))
+    return out
+
+
+COFFEE_NUDGE = dict(days=10, features=3, age_days=14, every_days=30)
+
+
+def coffee_nudge_due(store, now=None):
+    """The usage stats when the coffee card should show, else None: you're a regular (COFFEE_NUDGE: active
+    days, parts used, days since first use), it's been a month since the last card, you never pressed Buy me a
+    coffee, and stats_nudge is on. The caller checks you're here and nothing else is going on."""
+    s, now = store.settings, now or time.time()
+    if (not s.get("stats_nudge", True) or s.get("coffee_clicked") or
+            now - (at if isinstance(at := s.get("coffee_nudge_at"), (int, float)) else 0) <
+            COFFEE_NUDGE["every_days"] * 86400):
+        return None
+    st = usage_stats(store)
+    age = (datetime.fromtimestamp(now).date() - st["first"]).days if st["first"] else 0
+    ok = (st["days"] >= COFFEE_NUDGE["days"] and len(st["features"]) >= COFFEE_NUDGE["features"]
+          and age >= COFFEE_NUDGE["age_days"])
+    return st if ok else None
 
 
 def build_ai_export(store, days=None, include_analyses=True, calendar_events=None):
@@ -3126,6 +3529,363 @@ class FocusTimer(QObject):
         return sorted(((t, round(m)) for t, m in by.items() if m >= 1), key=lambda x: -x[1])
 
 
+def join_names(names):
+    names = list(names)
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+class AppBlocker(QObject):
+    """Keeps the apps you picked closed during focus sessions ("Block in every focus session") or for a block of minutes
+    you start yourself, with short breaks. Opening one closes it again with a low tone and a line from the circle.
+    At the end it says they're unblocked. Settings: block_apps (exe names, "pwa:<app id>" for an installed web app,
+    closed by its window), block_with_focus;
+    a running block lives in settings['block'] so it survives a restart, and each block is logged to focus_log.jsonl
+    (kind "block"). Apps are left alone while the mic or camera is in use (a call). The OS calls do nothing
+    outside Windows."""
+    SWEEP_MS = 1500
+    CAUGHT_GAP_S = 3           # ponytail: one tone and line per app at most this often (an app that restarts itself
+                               # gets one every 3 s; a per-app back-off if one does)
+    WARN_S = 15                # warning before a break ends and the apps close again
+    changed = Signal()         # a block started, ended, went on or off a break, or let an app open (not every sweep)
+
+    def __init__(self, store, timer, nudges=None):
+        super().__init__()
+        self.store, self.timer, self.nudges = store, timer, nudges
+        self._said = {}
+        self._quiet = False        # the next sweep closes apps without the tone (start, after a break)
+        self.last_tries = ""       # a focus session's tally waits here for its end card
+        self._call_said = 0
+        timer.started.connect(self._timer_started)
+        timer.ended.connect(self._timer_ended)
+        b = self.block
+        if b and ((b.get("until") and time.time() >= b["until"]) or (b.get("focus") and not self._focus_running())):
+            self.end(quiet=True)            # ran out while the app was closed
+        self.qt = QTimer(self)
+        self.qt.setInterval(self.SWEEP_MS)
+        self.qt.timeout.connect(self._tick)
+        self.qt.start()
+
+    # state
+    def picks(self):
+        return [str(p).lower() for p in self.store.settings.get("block_apps", []) if str(p).strip()]
+
+    @property
+    def block(self):
+        b = self.store.settings.get("block")
+        return b if isinstance(b, dict) else None
+
+    def _focus_running(self):
+        return self.timer.running and self.timer.kind == "focus"
+
+    def on_break(self):
+        b = self.block
+        return bool(b and time.time() < b.get("break_until", 0))
+
+    def badge(self):
+        """The list's block button badge: time left as m:ss ("5:00"), h:mm:ss from an hour, "" when not blocking
+        or on a break (the apps are open then)."""
+        if not self.block or self.on_break():
+            return ""
+        n = math.ceil(self.left_min() * 60)
+        h, m = divmod(n // 60, 60)
+        return f"{h}:{m:02d}:{n % 60:02d}" if h else f"{m}:{n % 60:02d}"
+
+    def left_min(self):
+        """Minutes left in the block (for one tied to a focus round, in the round)."""
+        b = self.block
+        if not b:
+            return 0
+        return max(0.0, ((b["until"] - time.time()) if b.get("until") else self.timer.remaining()) / 60)
+
+    def breaks(self, choices=(5, 10)):
+        """Break or unblock lengths worth offering: only ones shorter than what's left of the block."""
+        left = self.left_min()
+        return [m for m in choices if m < left]
+
+    def status(self):
+        b = self.block
+        if not b:
+            return ""
+        picks = self.picks()
+        names = join_names([app_nice(p) for p in picks[:3]] + (["more"] if len(picks) > 3 else []))
+        if self.on_break():
+            return f"On a break: {names} open until {datetime.fromtimestamp(b['break_until']):%H:%M}."
+        return f"Blocking {names}: " + (f"{fmt_min(round(self.left_min()))} min left." if b.get("until") else
+                                         "until this focus session ends.")
+
+    def _save(self):
+        self.store.save()
+
+    # start, break, end
+    def begin(self, minutes=None, focus=False):
+        """Start blocking: for this many minutes, or (focus=True) until the running focus round ends. Closes the
+        picked apps now. False when nothing is picked."""
+        if not self.picks():
+            return False
+        now = time.time()
+        self.store.settings["block"] = {"start": now, "until": None if focus else now + float(minutes) * 60,
+                                        "minutes": None if focus else float(minutes), "focus": bool(focus),
+                                        "break_until": 0, "closed": [], "caught": 0}
+        self._said = {}
+        self._quiet = True
+        self._save()
+        self.changed.emit()
+        self.sweep()
+        if not focus:
+            self.say(f"{self._apps_word()} blocked for {fmt_min(round(float(minutes)))} min.", [("Got it", "ok")],
+                     timeout_ms=5000)
+        return True
+
+    def _apps_word(self):
+        return "App" if len(self.picks()) == 1 else "Apps"
+
+    def take_break(self, minutes):
+        b = self.block
+        if not b:
+            return
+        b["break_until"] = time.time() + float(minutes) * 60
+        b.pop("warned", None)
+        self._save()
+        self.changed.emit()
+        self.say(f"Break for {fmt_min(round(float(minutes)))} min. Your apps are open for now.", [], timeout_ms=4000,
+                 emoji="\U0001F513")
+
+    def end(self, early=False, quiet=False):
+        """Stop blocking and log it. Says the apps are unblocked, with how often you tried, unless quiet."""
+        b = self.block
+        if not b:
+            return
+        self.store.settings["block"] = None
+        self._save()
+        self.changed.emit()
+        now = time.time()
+        left = max(0.0, (b["until"] - now) / 60) if b.get("until") else 0
+        apps = sorted(app_nice(c["pick"]) for c in b.get("closed", []))
+        note = (f"closed {join_names(apps)}" if apps else "nothing to close") + f"; caught {b.get('caught', 0)} times"
+        tries = self.tries_text(b)
+        if tries:
+            note += "; " + tries[:-1].replace("You tried to open ", "tried ")
+        if early and b.get("until"):
+            note += f"; stopped early, {round(left)} min left"
+        FocusTimer._write({"kind": "block", "start": datetime.fromtimestamp(b["start"]).isoformat(timespec="seconds"),
+                           "end": datetime.now().isoformat(timespec="seconds"), "planned_min": b.get("minutes") or "",
+                           "focused_min": round((now - b["start"]) / 60, 1), "completed": not early,
+                           "note": note + ("; with a focus round" if b.get("focus") else "")})
+        if quiet:
+            return
+        ls = getattr(self.timer, "last_session", None)
+        on_card = bool(b.get("focus") and not early and ls and time.time() - ls.get("end", 0) < 5)
+        self.last_tries = tries if on_card else ""      # the focus session's end card shows it
+        if not early and not b.get("focus") and self.store.settings.get("reminder_tone", "soft") != "mute":
+            play_reminder_tone("done")              # a focus session has its own finish sound
+        if not on_card:                                 # a focus session's end card has the tally instead
+            self.say((("" if early or b.get("focus") else "Block done. ") + f"{self._apps_word()} unblocked. " + tries).strip(),
+                     [], timeout_ms=12000 if tries else 7000, emoji="\U0001F513")
+
+    @staticmethod
+    def tries_text(b):
+        """'You tried to open WhatsApp 3 times and Teams once.' for a block, or ''."""
+        tries = sorted((b or {}).get("tries", {}).items(), key=lambda kv: -kv[1])
+        bits = [f"{app_nice(p)} " + ("once" if n == 1 else f"{n} times") for p, n in tries]
+        return f"You tried to open {join_names(bits)}." if bits else ""
+
+    def take_tries(self):
+        """The tally of the focus session's block that just ended, for its end card (once)."""
+        t, self.last_tries = self.last_tries, ""
+        return t
+
+    def ask_stop(self):
+        """The speed bump before stopping early: a break is offered first."""
+        b = self.block
+        if not b:
+            return
+        if self.nudges is None or not self.nudges.bubble.isVisible():
+            self.end(early=True)                 # no circle to ask from (hidden): Stop just stops
+            return
+        left = f"{fmt_min(max(1, round(self.left_min())))} min left." if b.get("until") else "The focus session is still on."
+        self.say("Stop the block? " + left, [("Keep blocking", "ok")] + [(f"Take {m} min", f"brk_{m}")
+                                                                         for m in self.breaks((5,))]
+                 + [("Stop", "stop_yes")], timeout_ms=15000)
+
+    def ask_unblock(self):
+        """Press and hold the circle (or the menu) during a block: which app, then 3 / 5 / 10 / typed minutes.
+        False when nothing is blocked."""
+        if not self.block:
+            return False
+        picks = self.picks()
+        if len(picks) == 1:
+            self._ask_unblock_min(picks[0])
+        else:                                    # ponytail: first 5 apps as buttons, All covers the rest
+            self.say("Unblock which app?", [(app_nice(p), f"unbapp:{p}") for p in picks[:5]] + [("All", "unbapp:*")],
+                     timeout_ms=30000)
+        return True
+
+    def _ask_unblock_min(self, pick):
+        prefix = "brk" if pick == "*" else f"unb:{pick}"
+        most = max(1, min(120, int(self.left_min())))            # never past the end of the block
+        self.say(f"Unblock {'all apps' if pick == '*' else app_nice(pick)} for how long?",
+                 [(f"{m} min", f"{prefix}_{m}") for m in self.breaks((3, 5, 10))], timeout_ms=20000,
+                 minute_input=(prefix, most, "Unblock"))
+
+    def allow(self, pick, minutes):
+        """Let one picked app stay open for a few minutes; the rest stay blocked."""
+        b = self.block
+        if not b:
+            return
+        b.setdefault("allow", {})[pick] = time.time() + float(minutes) * 60
+        b["allow_warned"] = [p for p in b.get("allow_warned", []) if p != pick]
+        self._save()
+        self.changed.emit()
+        self.say(f"{app_nice(pick)} is open for {fmt_min(round(float(minutes)))} min.", [], timeout_ms=4000,
+                 emoji="\U0001F513")
+
+    def stop_for(self, pick):
+        """Unblock one app for the rest of this block; the others stay blocked."""
+        b = self.block
+        if not b:
+            return
+        b.setdefault("allow", {})[pick] = time.time() + 366 * 86400   # ponytail: "until the block ends"; it ends first
+        self._save()
+        self.changed.emit()
+        self.say(f"{app_nice(pick)} is unblocked until this block ends.", [], timeout_ms=4000, emoji="\U0001F513")
+
+    # the circle
+    def say(self, text, buttons, timeout_ms=8000, minute_input=None, emoji="\U0001F6AB", keys=None):
+        """A line from the circle. keys=False: it doesn't take the keyboard (lines that pop up by themselves)."""
+        nd = self.nudges
+        if nd is None or not nd.bubble.isVisible():
+            return
+        nd._say_followup(text, buttons, "__block__", emoji=emoji, timeout_ms=timeout_ms,
+                         minute_input=minute_input, keys=bool(buttons) if keys is None else keys)
+
+    def answer(self, key):
+        if key.startswith("brk_") and key[4:].isdigit():
+            self.take_break(int(key[4:]))
+        elif key.startswith("unbapp:"):
+            QTimer.singleShot(0, lambda: self._ask_unblock_min(key[7:]))
+        elif key == "pause":
+            QTimer.singleShot(0, self.ask_unblock)
+        elif key.startswith("unstop:"):
+            self.stop_for(key[7:])
+        elif key.startswith("unb:") and key.rpartition("_")[2].isdigit():
+            pick, _, n = key[4:].rpartition("_")
+            self.allow(pick, int(n))
+        elif key == "stop":
+            QTimer.singleShot(0, self.ask_stop)
+        elif key == "stop_yes":
+            self.end(early=True)
+
+    # watching
+    def _timer_started(self):
+        if self._focus_running() and self.store.settings.get("block_with_focus", False) and not self.block:
+            self.begin(focus=True)
+
+    def _timer_ended(self):
+        b = self.block
+        if b and b.get("focus") and not self._focus_running():
+            self.end()
+
+    def _tick(self):
+        b = self.block
+        if not b:
+            return
+        now = time.time()
+        if b.get("until") and now >= b["until"]:
+            self.end()
+            return
+        allow = b.get("allow", {})
+        for p, until in list(allow.items()):
+            if now >= until:                     # its few minutes are up: close it again, quietly
+                del allow[p]
+                self._quiet = True
+                self._save()
+            elif until - now <= self.WARN_S and p not in b.setdefault("allow_warned", []):
+                b["allow_warned"].append(p)
+                if p in self._hits(allowed=True).values():
+                    self.say(f"{app_nice(p)} closes in {self.WARN_S} s.", [("OK", "ok")] +
+                             [("5 more min", f"unb:{p}_5") for _ in self.breaks((5,))],
+                             timeout_ms=self.WARN_S * 1000, keys=False)
+        brk = b.get("break_until", 0)
+        if now < brk:
+            if brk - now <= self.WARN_S and not b.get("warned"):
+                b["warned"] = True
+                running = sorted({app_nice(p) for p in self._hits().values()})
+                if running:
+                    self.say(f"Break's almost over. {join_names(running)} "
+                             f"{'closes' if len(running) == 1 else 'close'} in {self.WARN_S} s.",
+                             [("OK", "ok")] + [("5 more min", "brk_5") for _ in self.breaks((5,))],
+                             timeout_ms=self.WARN_S * 1000, keys=False)
+            return
+        if brk:
+            b["break_until"] = 0
+            self._quiet = True
+            self._save()
+            self.changed.emit()
+        self.sweep()
+
+    def _hits(self, procs=None, allowed=False):
+        """{pid: pick} of running processes that belong to a picked app (not the ones unblocked for a few
+        minutes, unless allowed), plus {("win", hwnd): pick} for open windows of picked web apps."""
+        b = self.block or {}
+        picks = [p for p in self.picks() if allowed or b.get("allow", {}).get(p, 0) <= time.time()]
+        if not picks:
+            return {}
+        procs = running_apps() if procs is None else procs
+        out = {pid: p for pid, (exe, _path) in procs.items() if (p := block_pick_for(exe, picks))}
+        if any(p.startswith("pwa:") for p in picks):
+            out.update({("win", h): f"pwa:{a}" for h, a in pwa_windows().items() if f"pwa:{a}" in picks})
+        return out
+
+    def sweep(self):
+        """Close the picked apps that are running (their names go in the block's "closed"); a new catch gets the tone and a
+        line (not on the first sweep of a block or after a break). Returns the names it closed."""
+        b = self.block
+        procs = running_apps() if b else {}
+        hits = self._hits(procs)
+        quiet, self._quiet = self._quiet, False
+        if not hits:
+            return []
+        if mic_or_camera_in_use():               # maybe a call in one of them: never cut it off
+            if time.time() - self._call_said > 600:
+                self._call_said = time.time()
+                self.say("The mic or camera is in use, so your blocked apps stay open for now.", [], timeout_ms=5000)
+            self._quiet = quiet
+            return []
+        closed = b.setdefault("closed", [])
+        for pick in set(hits.values()) - {c["pick"] for c in closed}:
+            closed.append({"pick": pick})
+        pids = [h for h in hits if not isinstance(h, tuple)]
+        wins = [h[1] for h in hits if isinstance(h, tuple)]
+        if pids:
+            kill_processes(pids)
+        if wins:
+            close_windows(wins)
+        if not quiet:
+            now = time.time()
+            fresh = [p for p in sorted(set(hits.values())) if now - self._said.get(p, 0) > self.CAUGHT_GAP_S]
+            if fresh:
+                b["caught"] = b.get("caught", 0) + 1
+                tries = b.setdefault("tries", {})
+                for p in fresh:
+                    self._said[p] = now
+                    tries[p] = tries.get(p, 0) + 1
+                play_reminder_tone("block")
+                left = (f"blocked for {fmt_min(max(1, round(self.left_min())))} more min." if b.get("until")
+                        else "blocked until this focus session ends.")
+                one = fresh[0] if len(fresh) == 1 else None
+                n = tries[one] if one else 1
+                many = len(self.picks()) > 1
+                btns = ([("Pause", f"unbapp:{one}")] + ([("Stop for this app", f"unstop:{one}")] if many else [])
+                        if one else [("Pause", "pause")])
+                self.say(f"{join_names([app_nice(p) for p in fresh])} {'is' if one else 'are'} {left}"
+                         + (f" You've tried to open it {n} times." if n > 1 else ""),
+                         btns + [("Stop for all" if many else "Stop", "stop")], keys=False)
+        self._save()
+        return sorted({app_nice(p) for p in hits.values()})
+
+
 def send_phone_push(topic, title, message, priority=4, on_done=None):
     """Push via ntfy in a background thread. on_done(ok, info) is called from that thread, so pass a
     Qt signal's emit (queued to the GUI thread), never a widget method. Failures also go to error.log."""
@@ -3636,7 +4396,7 @@ class SpeechBubble(QWidget):
         self.face.hide()
         top = QHBoxLayout()
         top.setSpacing(6)
-        top.addWidget(self.face, 0, Qt.AlignTop)
+        top.addWidget(self.face, 0, Qt.AlignVCenter)        # beside the text, not above its first line
         top.addWidget(self.label, 1)
         self.close_btn = QToolButton(self)     # top right, the same as Esc: no Skip, Cancel or OK chip to hunt for
         self.close_btn.setObjectName("sayClose")
@@ -3674,7 +4434,7 @@ class SpeechBubble(QWidget):
         self._minute_prefix = None
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
-        self.timer.timeout.connect(lambda: None if self.underMouse() else self._finish("timeout"))
+        self.timer.timeout.connect(lambda: self.timer.start(1500) if self.underMouse() else self._finish("timeout"))
         self.anim = QVariantAnimation(self)
         self.anim.valueChanged.connect(lambda v: self.setWindowOpacity(float(v)))
         self._btns = []
@@ -3726,7 +4486,6 @@ class SpeechBubble(QWidget):
             self.minute_edit.setAccessibleName(f"Custom {minute_input[0]} minutes")
             self.minute_start.setText(minute_input[2] if len(minute_input) > 2 else "Start")
         self.minute_row.setVisible(bool(minute_input or text_input))
-        self.close_btn.setVisible(bool(buttons or minute_input or text_input))   # a plain line just fades
         for b in self._btns:
             b.setParent(None)
             b.deleteLater()
@@ -4384,6 +5143,7 @@ class NudgeManager(QObject):
     wants_more_break = Signal(float)          # "a few more min": start a break of this many minutes
     wants_snap = Signal()                     # "Take snap": open the camera check
     GREET_GAP_S = 3 * 3600                    # no input this long, then input again: a greeting
+    blocker = None                            # AppBlocker, set in main(): its lines are answered here
 
     def __init__(self, store, timer, bubble, speech, guard_fn, calendar=None):
         super().__init__()
@@ -4775,6 +5535,10 @@ class NudgeManager(QObject):
         msg, self._asked = self._asked, None
         if msg is None:
             return
+        if msg == "__block__":
+            if self.blocker:
+                self.blocker.answer(key)
+            return
         if msg == "__greet__":
             if key == "snap":
                 self.store.settings["snap_no"] = 0
@@ -5142,6 +5906,10 @@ class SessionCard(QWidget):
         self.apps_line.setObjectName("todayLine")
         self.apps_line.setWordWrap(True)
         lay.addWidget(self.apps_line)
+        self.blocked_line = QLabel(self)         # a block during the session: how often you tried a blocked app
+        self.blocked_line.setObjectName("todayLine")
+        self.blocked_line.setWordWrap(True)
+        lay.addWidget(self.blocked_line)
         self.mark_row = QWidget(self)            # press the apps that distracted you this round
         mark_lay = QVBoxLayout(self.mark_row)
         mark_lay.setContentsMargins(0, 0, 0, 0)
@@ -5238,8 +6006,10 @@ class SessionCard(QWidget):
         p.drawRoundedRect(r, 12, 12)
 
     def show_for(self, circle_rect, minutes, parked, urges, dists, break_min, focus_min, auto_break=False,
-                 glimmers=0, today="", on="", apps=None, marks=None):
+                 glimmers=0, today="", on="", apps=None, marks=None, blocked=""):
         face, anim, line = session_quip(minutes, parked, urges, dists, glimmers)
+        self.blocked_line.setText("\U0001F6AB " + blocked if blocked else "")
+        self.blocked_line.setVisible(bool(blocked))
         self.quip.setText(line)
         self.face.set(face, anim)
         self.today.setText(today)
@@ -5498,6 +6268,7 @@ class Bubble(QWidget):
     SIZE = 56          # widget size; leaves room for the glow and sparks around the ring
     BODY_R = 16        # radius of the circle
     RING_R = 21        # radius of the timer outline
+    HOLD_MS = 600      # press and hold this long without moving (on_hold, e.g. unblock an app)
     PALETTE = {"focus": ("#fff3c4", "#ffb347", "#e8590c", "#8a2d0a"),   # tip, hot, warm, base
                "break": ("#e6fff6", "#7ee0c0", "#2fb58a", "#135e4a")}
 
@@ -5520,6 +6291,12 @@ class Bubble(QWidget):
         self._hover = False
         self._press = None
         self._dragging = False
+        self.on_hold = None          # callable() -> bool (True when it used the press), set by main()
+        self._held = False
+        self._hold = QTimer(self)
+        self._hold.setSingleShot(True)
+        self._hold.setInterval(self.HOLD_MS)
+        self._hold.timeout.connect(self._held_down)
         self.menu_builder = menu_builder
         self._sparks = []            # [x, y, vx, vy, age, life, color]
         self._t0 = time.monotonic()
@@ -5979,6 +6756,13 @@ class Bubble(QWidget):
             self._press = e.globalPosition().toPoint()
             self._origin = self.pos()
             self._dragging = False
+            self._held = False
+            if self.on_hold:
+                self._hold.start()
+
+    def _held_down(self):
+        if self._press is not None and not self._dragging and self.on_hold:
+            self._held = bool(self.on_hold())
 
     def mouseMoveEvent(self, e):
         if self._press is None:
@@ -5986,15 +6770,17 @@ class Bubble(QWidget):
         delta = e.globalPosition().toPoint() - self._press
         if delta.manhattanLength() > 4:
             self._dragging = True
+            self._hold.stop()
         if self._dragging:
             self.move(self._origin + delta)
 
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton or self._press is None:
             return
+        self._hold.stop()
         if self._dragging:
             self.moved.emit(self.pos())
-        else:
+        elif not self._held:                     # a press and hold already did its thing
             self.clicked.emit()
         self._press = None
 
@@ -6580,7 +7366,7 @@ def show_reminder_chip(btn, reminder):
     btn.style().unpolish(btn)
     btn.style().polish(btn)
     btn.setToolTip((reminder_label(reminder) + ". Click to change") if when else
-                   "Remind me (or type @3pm or 20m in the note)")
+                   "Remind me, Alt+R (or type @3pm or 20m in the note)")
 
 
 def reminder_confirmation(reminder):
@@ -6589,9 +7375,11 @@ def reminder_confirmation(reminder):
 
 def reminder_tone_wav(kind):
     """A short chime through the normal audio device, independent of Windows theme sounds."""
-    notes = {"soft": [(660, 0.16), (880, 0.22)], "peek": [(1047, 0.06), (1397, 0.1)]}.get(
+    notes = {"soft": [(660, 0.16), (880, 0.22)], "peek": [(1047, 0.06), (1397, 0.1)],
+             "block": [(220, 0.16), (165, 0.3)], "done": [(587, 0.14), (784, 0.3)]}.get(
         kind, [(880, 0.15), (1175, 0.15), (988, 0.24)])
-    loud = 5000 if kind == "peek" else 11000
+    # block: the low "nope" when a blocked app opens; done: a block ran out, a quiet two notes
+    loud = {"peek": 5000, "block": 7000, "done": 3200}.get(kind, 11000)
     rate = 22050
     samples = bytearray()
     for frequency, duration in notes:
@@ -7163,18 +7951,18 @@ DRIFT_TIP = ("Drifted off (phone, a rabbit hole)? Take those minutes out of this
              "so only real focus is logged. The timer keeps going.")
 
 
-def take_out_drift(timer, parent):
-    """Ask how many minutes you drifted and take them out of the running focus round."""
+def take_out_drift(timer, parent, say):
+    """Ask how many minutes you drifted and take them out of the running focus round. say(text) shows the
+    answer: the list's toast, or a line from the circle."""
     most = timer.drifted_max()
     if most < 1:
-        QToolTip.showText(QCursor.pos(), "Nothing to take out yet. Less than a minute of focus so far.")
+        say("Nothing to take out yet. Less than a minute of focus so far.")
         return 0
     minutes = ask(parent, "Minutes you drifted", min(5, most), [c for c in (2, 5, 10, 15) if c <= most],
                   "min", (1, most))
     taken = timer.take_out(minutes) if minutes else 0
     if taken:
-        QToolTip.showText(QCursor.pos(), f"Noted. Took out {taken} min. Net focus so far {timer.drifted_max()} min.",
-                          None, QRect(), 4000)
+        say(f"Noted. Took out {taken} min. Net focus so far {timer.drifted_max()} min.")
     return taken
 
 
@@ -8670,7 +9458,8 @@ def line_icon(kind, color, size=26):
     """Flat line icons on a 24-unit grid (rounded joins, 2-unit strokes), drawn at twice the size so they stay crisp
     on high-DPI screens: "trash", "tag", "bell", "pencil", "open", "eyeoff", "close", "pin", "calendar", "repeat",
     "notes", "video", "plus", "camera", "mic", "dot", "play", "pause", "prev", "next", "folder", "save", "film",
-    "face", "flip", "check", "copy", "link", "left", "right", "refresh", "gear" and "timer". A "-off" ending
+    "face", "flip", "check", "copy", "link", "left", "right", "refresh", "gear", "timer", "search", "music",
+    "block", "help" and "sparkle". A "-off" ending
     crosses it out
     ("mic-off")."""
     from PySide6.QtGui import QIcon
@@ -8919,6 +9708,37 @@ def line_icon(kind, color, size=26):
         p.drawLine(QPointF(12, 13.5), QPointF(12, 9.5))
         p.drawLine(QPointF(10, 2.8), QPointF(14, 2.8))
         p.drawLine(QPointF(12, 2.8), QPointF(12, 6))
+    elif kind == "search":                                                  # a magnifier
+        p.drawEllipse(QPointF(10.5, 10.5), 6.5, 6.5)
+        p.drawLine(QPointF(15.3, 15.3), QPointF(20.5, 20.5))
+    elif kind == "music":                                                   # two beamed notes
+        p.drawPolyline([QPointF(9, 17.5), QPointF(9, 5.5), QPointF(19, 3.5), QPointF(19, 15.5)])
+        p.setBrush(fill)
+        p.drawEllipse(QPointF(6.6, 17.6), 2.6, 2.2)
+        p.drawEllipse(QPointF(16.6, 15.6), 2.6, 2.2)
+    elif kind == "block":                                                   # a no-entry circle
+        p.drawEllipse(QPointF(12, 12), 8.5, 8.5)
+        p.drawLine(QPointF(6, 6), QPointF(18, 18))
+    elif kind == "help":                                                    # a question mark in a circle
+        p.drawEllipse(QPointF(12, 12), 9, 9)
+        q = QPainterPath()
+        q.moveTo(9.4, 9.6)
+        q.cubicTo(9.4, 6.6, 14.6, 6.6, 14.6, 9.4)
+        q.cubicTo(14.6, 11.3, 12, 11.5, 12, 13.6)
+        p.drawPath(q)
+        p.setPen(Qt.NoPen)
+        p.setBrush(fill)
+        p.drawEllipse(QPointF(12, 16.9), 1.25, 1.25)
+    elif kind == "sparkle":                                                 # a big and a small four-point star
+        for cx, cy, r in ((10, 13.5, 7.5), (18.5, 5.5, 3)):
+            k = r * 0.18
+            star = QPainterPath()
+            star.moveTo(cx, cy - r)
+            star.quadTo(cx + k, cy - k, cx + r, cy)
+            star.quadTo(cx + k, cy + k, cx, cy + r)
+            star.quadTo(cx - k, cy + k, cx - r, cy)
+            star.quadTo(cx - k, cy - k, cx, cy - r)
+            p.drawPath(star)
     if crossed:
         p.setPen(QPen(QColor(color), 2.0, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(3.5, 3.5), QPointF(20.5, 20.5))
@@ -8927,16 +9747,60 @@ def line_icon(kind, color, size=26):
 
 
 class IconAct(QToolButton):
-    """A pill button that is just an icon (Tags, Delete), which changes colour on hover like the others."""
+    """A pill button that is just an icon (Tags, Delete), which changes colour on hover like the others. Colours are
+    hex codes or C keys; keys follow a light/dark switch through retint()."""
 
     def __init__(self, kind, color, hover_color, tip):
         super().__init__()
         self.setObjectName("act")
-        self._icons = (line_icon(kind, color), line_icon(kind, hover_color))
-        self.setIcon(self._icons[0])
+        self._kind, self._color, self._hover, self._on = kind, color, hover_color, False
+        self.retint()
         self.setIconSize(QSize(13, 13))     # no taller than the text buttons, so the pill keeps its height
         self.setToolTip(tip)
         self.setAccessibleName(tip.split(":")[0].split(" (")[0])
+
+    def retint(self):
+        """Bake the icons from the current colours (lit in the accent while on)."""
+        a = C["accent_text"]
+        self._icons = tuple(line_icon(self._kind, a if self._on else C.get(c, c)) for c in (self._color, self._hover))
+        self.setIcon(self._icons[1 if self.underMouse() or self.hasFocus() else 0])
+
+    def set_on(self, on):
+        """Lit in the accent colour while something runs (music playing, apps blocked)."""
+        self._on = bool(on)
+        self.retint()
+
+    badge = ""                  # a short text on an accent pill just above the button (the block's time left)
+    badge_lbl = None
+
+    def set_badge(self, text):
+        if text == self.badge:
+            return
+        self.badge = text
+        lb = self.badge_lbl
+        if lb is None:
+            if not text or self.parentWidget() is None:
+                return
+            lb = self.badge_lbl = QLabel(self.parentWidget())     # a sibling, so it can sit above the button
+            lb.setAttribute(Qt.WA_TransparentForMouseEvents)
+            lb.setAlignment(Qt.AlignCenter)
+        lb.setStyleSheet(f"background: {C['accent']}; color: #ffffff; border-radius: 7px; padding: 0 5px;"
+                         " font-size: 11px; font-weight: 600;")
+        lb.setText(text)
+        lb.setFixedHeight(15)
+        lb.adjustSize()
+        self._place_badge()
+        lb.setVisible(bool(text))
+
+    def _place_badge(self):
+        lb = self.badge_lbl
+        if lb is not None:
+            lb.move(self.x() + (self.width() - lb.width()) // 2, self.y() - lb.height() + 3)
+            lb.raise_()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self._place_badge()
 
     def enterEvent(self, e):
         self.setIcon(self._icons[1])
@@ -9084,9 +9948,9 @@ class HelpPopup(QFrame):
             (f"{GLIMMER_ICON} Lift / {ANTI_ICON} drain", "A small good moment / a small moment that put you on edge. "
                                                            "Tracked for your patterns."),
             (f"{IDEA_ICON} Idea", "Something worth keeping, not a to-do. Filter by Idea to see them all."),
-            ("Search", "\u2315 or Ctrl+F: search this list, filter by flag, state or date, change the sort, "
+            ("Search", "The magnifier or Ctrl+F: search this list, filter by flag, state or date, change the sort, "
                        "or open <b>History</b> to browse every thought you've ever parked."),
-            ("Sound", "\u266B opens noise (brown, pink, white, volume) and Music (your songs on repeat)."),
+            ("Sound", "The music note opens noise (brown, pink, white, volume) and Music (your songs on repeat)."),
             ("Flags", "Click a task, then Tab from the title through the flags and press Space. "
                       "Switch flags on or off in Settings &gt; Flags."),
             ("At the break", "\u2713 done. Hover for <b>Later</b> (not today) or <b>Let go</b> (no action needed: "
@@ -9931,61 +10795,37 @@ class Panel(RoundedWindow):
         self.tabs.tabMoved.connect(self._tab_moved)
         self.tabs.customContextMenuRequested.connect(self._tab_menu)
         self.tabs.tabBarDoubleClicked.connect(lambda i: self._rename_list(i))
-        add = QToolButton()
-        add.setObjectName("addTab")
-        add.setText("+")
-        add.setToolTip("New list")
-        add.clicked.connect(self._new_list)
-        helpb = QToolButton()
-        helpb.setObjectName("help")
-        helpb.setText("?")
-        helpb.setToolTip("How it works")
-        helpb.clicked.connect(lambda: self._help_menu(helpb))
-        aib = QToolButton()
-        aib.setObjectName("help")
-        aib.setText("\u2728")
-        aib.setToolTip("Your thoughts: browse history, copy for AI, AI analyses")
-        aib.clicked.connect(lambda: self._open_ai_menu(aib))
-        gear = QToolButton()
-        gear.setObjectName("help")
-        gear.setText("\u2699")
-        gear.setToolTip("Settings")
-        gear.clicked.connect(lambda: self._open_settings(gear))
+        def head_btn(kind, tip, act):
+            b = IconAct(kind, "text", "accent_text", tip)
+            b.setObjectName("headBtn")
+            b.setIconSize(QSize(20, 20))
+            b.setFixedSize(28, 30)       # big enough to hit; the window minimum width leaves room
+            b.setProperty("keep_tips", True)   # icons only: the tip is the label, so it stays after the first week
+            b.clicked.connect(act)
+            THEME["hooks"].append(b.retint)
+            return b
         self.title = QLabel(APP_NAME)      # app name, left of the buttons; what it does gets its own line below
         self.title.setObjectName("appTitle")
         sub = SentenceLabel(APP_TAGLINE)
         sub.setObjectName("appSub")
         tabs_row.addWidget(self.title, 1)
-        closeb = QToolButton()
-        closeb.setObjectName("help")
-        closeb.setText("\u2715")
-        closeb.setToolTip("Close (Esc)")
-        closeb.clicked.connect(self.hide)
-        findb = QToolButton()
-        findb.setObjectName("help")
-        findb.setText("\u2315")
-        findb.setToolTip("Search, filter and sort (Ctrl+F)")
-        findb.clicked.connect(lambda: self.toggle_search())
-        self.findb = findb
-        self.noise_btn = QToolButton()
-        self.noise_btn.setObjectName("help")
-        self.noise_btn.setText("\u266B")
-        self.noise_btn.setToolTip("Background noise and music")
+        # grouped: your notes (find, new list) | the focus session (music, block) | about (thoughts, help, settings) | close
+        findb = self.findb = head_btn("search", "Search, filter and sort (Ctrl+F)", lambda: self.toggle_search())
+        add = head_btn("plus", "New list", self._new_list)
+        self.noise_btn = head_btn("music", "Background noise and music",
+                                  lambda: getattr(self, "noise_menu", lambda a: None)(self.noise_btn))
         self.noise_btn.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.noise_btn.clicked.connect(lambda: getattr(self, "noise_menu", lambda a: None)(self.noise_btn))
         self.noise_btn.customContextMenuRequested.connect(
             lambda _p: getattr(self, "noise_menu", lambda a: None)(self.noise_btn))
-        tabs_row.addWidget(add)
-        tabs_row.addWidget(findb)
-        tabs_row.addWidget(self.noise_btn)
-        tabs_row.addWidget(helpb)
-        tabs_row.addWidget(aib)
-        tabs_row.addWidget(gear)
-        tabs_row.addWidget(closeb)
-        tabs_row.setAlignment(add, Qt.AlignTop)
-        for w in (add, findb, self.noise_btn, helpb, aib, gear, closeb):
-            tabs_row.setAlignment(w, Qt.AlignTop)
-            w.setFixedSize(26, 28)       # big enough to hit and read; the window minimum width leaves room
+        self.block_btn = head_btn("block", "Block apps", lambda: getattr(self, "block_menu", lambda a: None)(self.block_btn))
+        aib = head_btn("sparkle", "Your thoughts: browse history, copy for AI, AI analyses", lambda: self._open_ai_menu(aib))
+        helpb = head_btn("help", "How it works", lambda: self._help_menu(helpb))
+        gear = head_btn("gear", "Settings", lambda: self._open_settings(gear))
+        closeb = head_btn("close", "Close (Esc)", self.hide)
+        for i, group in enumerate(((findb, add), (self.noise_btn, self.block_btn), (aib, helpb, gear), (closeb,))):
+            tabs_row.addSpacing(5 if i else 0)
+            for w in group:
+                tabs_row.addWidget(w, 0, Qt.AlignTop)
         self.title.ensurePolished()
         self.title.setMinimumWidth(self.title.fontMetrics().horizontalAdvance(APP_NAME) + 16)
         v.addLayout(tabs_row)
@@ -10094,7 +10934,7 @@ class Panel(RoundedWindow):
         self.timer_label.setMinimumWidth(40)
         tr.addWidget(self.timer_label, 1)
         self.timer_btns = []
-        self.ask_tag = None                  # set by main(): "For..." asks what the running round is for
+        self.ask_tag = None                  # set by main(): "Label..." / "Break for..." ask what the round is for
         for _ in range(4):
             b = QToolButton()
             b.setObjectName("timerBtn")
@@ -10137,6 +10977,9 @@ class Panel(RoundedWindow):
             sc = QShortcut(QKeySequence(f"Alt+{number}"), self)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
             sc.activated.connect(lambda n=number: toggle_numbered_flag(self.qflags, self.store.settings, n))
+        sc = QShortcut(QKeySequence("Alt+R"), self)
+        sc.setContext(Qt.WidgetWithChildrenShortcut)
+        sc.activated.connect(lambda: self.reminder_btn.isVisible() and self.reminder_btn.click())
 
         self.drop_banner = QLabel("Drop to park it as a new task")
         self.drop_banner.setObjectName("dropHint")
@@ -10192,8 +11035,17 @@ class Panel(RoundedWindow):
         self.toast_undo.setObjectName("toastUndo")
         self.toast_undo.setCursor(Qt.PointingHandCursor)
         self.toast_undo.setText("Undo")
+        self.toast_close = QToolButton()
+        self.toast_close.setObjectName("toastClose")
+        self.toast_close.setIcon(line_icon("close", C["dim"], 12))
+        self.toast_close.setIconSize(QSize(12, 12))
+        self.toast_close.setToolTip("Close")
+        self.toast_close.setAccessibleName("Close")
+        self.toast_close.setCursor(Qt.PointingHandCursor)
+        self.toast_close.clicked.connect(lambda: (self.toast_timer.stop(), self.toast.hide()))
         tl.addWidget(self.toast_text)
         tl.addWidget(self.toast_undo)
+        tl.addWidget(self.toast_close)
         self.toast.hide()
         self._undo_stack = []    # [(label, fn)], newest last; Ctrl+Z walks back through it
         self.toast_undo.setText("Undo")
@@ -10216,7 +11068,7 @@ class Panel(RoundedWindow):
         foot.addWidget(self.copy_all_btn)
         v.addLayout(foot)
         self.setMouseTracking(True)            # resize cursors on the edges
-        self.setMinimumSize(392 + 2 * self.SHADOW, 320)   # room for the app name and seven header icons
+        self.setMinimumSize(452 + 2 * self.SHADOW, 320)   # room for the app name and eight header icons
         self._resize = None
 
         QShortcut(QKeySequence("Escape"), self, self._escape)
@@ -11231,7 +12083,7 @@ class Panel(RoundedWindow):
         return st.get("break_min", DEFAULT_BREAK_MIN) if kind == "break" else st.get("focus_min", DEFAULT_FOCUS_MIN)
 
     def take_out_drift(self):
-        take_out_drift(self.timer, self)
+        take_out_drift(self.timer, self, lambda t: self._toast(t, ms=5000))
         self.update_timer_row()
 
     def update_timer_row(self):
@@ -11246,7 +12098,7 @@ class Panel(RoundedWindow):
             color = C["glimmer"]
             btns = [("End break", lambda: (tm.stop(), None))]
             if self.ask_tag:
-                btns.append(("For...", self.ask_tag, "What's this break for (meal, call, rest, walk)"))
+                btns.append(("Break for...", self.ask_tag, "What's this break for (meal, call, rest, walk)"))
         elif tm.running:
             on = tm.state.get("on")
             text = (("Paused" if tm.paused else "Focus") + (f" \u00B7 {short_text(on, 14)}" if on else "")
@@ -11255,7 +12107,8 @@ class Panel(RoundedWindow):
             btns = [("Resume" if tm.paused else "Pause", tm.resume if tm.paused else tm.pause),
                     ("Stop", tm.stop), ("Drifted", self.take_out_drift, DRIFT_TIP)]
             if self.ask_tag:
-                btns.append(("For...", self.ask_tag, "What's this round for (shows on the session card and in the AI export)"))
+                btns.append(("Label...", self.ask_tag, "What you're working on (shows on the session card and in "
+                                                            "the AI export)"))
         elif tm.overrun_since:
             text, color = tm.overrun_label(), C["idea"]
             btns = [(f"Start focus {fmt_min(fm)} min", lambda: tm.start(fm, "focus")), ("I'm back", tm.clear_overrun)]
@@ -11965,6 +12818,9 @@ class QuickBox(RoundedWindow):
             sc = QShortcut(QKeySequence(f"Alt+{number}"), self)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
             sc.activated.connect(lambda n=number: toggle_numbered_flag(self.flags, self.panel.store.settings, n))
+        sc = QShortcut(QKeySequence("Alt+R"), self)
+        sc.setContext(Qt.WidgetWithChildrenShortcut)
+        sc.activated.connect(lambda: self.reminder_btn.isVisible() and self.reminder_btn.click())
         QShortcut(QKeySequence("Escape"), self, self._escape)
         # safety: an empty, untouched box closes itself, so it never lingers if focus went elsewhere
         self.idle = QTimer(self)
@@ -13298,10 +14154,10 @@ def scene_look(p, t, k):
 
 TOUR_TILES = [("\U0001F4AC", "Check-ins", "After a long stretch without a focus round, it asks if you want one."),
               ("\U0001F50D", "Search", "Ctrl+F in the list searches titles and details, with filters and sort."),
-              ("\U0001F3B5", "Noise and music", "The ♫ at the top of the list plays brown, pink or white noise, or your "
+              ("\U0001F3B5", "Noise and music", "The music note at the top of the list plays brown, pink or white noise, or your "
                "own songs."),
               ("\U0001F634", "Nap timer", "Right-click the cloud > Nap timer for a quick timed rest."),
-              ("\U0001F558", "History", "Every thought you ever parked, with search and dates. ✨ > Browse history."),
+              ("\U0001F558", "History", "Every thought you ever parked, with search and dates. The sparkle at the top of the list > Browse history."),
               ("\U0001F504", "One-click update", "Right-click the cloud > Restart / update gets the newest version. "
                "Your notes stay."),
               ("\U0001F6DF", "Nothing is lost", "Ctrl+Z puts back Done, Later and Let go. Nothing is deleted for good."),
@@ -13986,6 +14842,12 @@ QWidget#settingsRoot {{ background: {C['bg']}; }}
 QListWidget#side {{ background: {C['surface']}; border: none; border-right: 1px solid {C['border']};
     color: {C['dim']}; font-size: 13px; outline: none; padding: 10px 6px; }}
 QListWidget#side::item {{ padding: 9px 10px; border-radius: 8px; margin: 1px 0; }}
+QListWidget#blockList {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
+    border-radius: 8px; outline: none; padding: 4px; font-size: 13px; }}
+QListWidget#blockList::item {{ padding: 5px 6px; border-radius: 6px; }}
+QListWidget#blockList::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
+QListWidget#blockList::indicator {{ width: 13px; height: 13px; border: 1px solid {C['dim']}; border-radius: 4px; }}
+QListWidget#blockList::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
 QListWidget#side::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
 QListWidget#side::item:hover:!selected {{ background: {C['surface_hi']}; color: {C['text']}; }}
 QScrollArea#page {{ background: {C['bg']}; border: none; }}
@@ -20192,15 +21054,539 @@ class MeetingBadge(QWidget):
         self._notify_meetings(now)
 
 
+def _blend(a, b, t):
+    """The colour t of the way from a to b."""
+    a, b = QColor(a), QColor(b)
+    return QColor(*(round(x + (y - x) * t) for x, y in ((a.red(), b.red()), (a.green(), b.green()),
+                                                         (a.blue(), b.blue()))))
+
+
+class UsageHeat(QWidget):
+    """Your days as a grid, one column a week (Monday on top), as many weeks as fit, today at the right. Shaded by
+    focus minutes (quartiles of your own days); a day with only parked thoughts gets the lightest shade. Hover a
+    day for its numbers. Colours are read at paint time, so a theme switch recolours it. Cells grow (up to 24 px)
+    when your history is short, so a new user's grid isn't mostly empty."""
+    TOP, LEFT = 16, 28
+
+    def __init__(self, st, parent=None):
+        super().__init__(parent)
+        self.st = st
+        self.setMouseTracking(True)
+        sp = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+        vals = sorted(v for v in st["day_focus"].values() if v)
+        self.cuts = [vals[int(len(vals) * q)] for q in (0.25, 0.5, 0.75)] if vals else []
+        first = st["first"] or st["today"]
+        self.span = (st["today"] - first).days // 7 + 2          # weeks of history, plus one to spare
+
+    def cell_for(self, width):
+        return max(15, min(24, (width - self.LEFT) // self.span))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.TOP + 7 * self.cell_for(width) + 20
+
+    def sizeHint(self):
+        return QSize(300, self.heightForWidth(300))
+
+    @property
+    def CELL(self):
+        return self.cell_for(self.width())
+
+    def weeks(self):
+        return max(4, (self.width() - self.LEFT) // self.CELL)
+
+    def start(self):
+        t = self.st["today"]
+        return t - timedelta(days=t.weekday() + 7 * (self.weeks() - 1))       # the Monday of the first column
+
+    def level(self, d):
+        m = self.st["day_focus"].get(d, 0)
+        if not m:
+            return 1 if self.st["day_thoughts"].get(d) else 0
+        return 2 + sum(m > c for c in self.cuts)
+
+    def shades(self):
+        return [QColor(C["surface_hi"])] + [_blend(C["surface_hi"], C["accent_text"], t) for t in (.22, .42, .6, .8, 1)]
+
+    def day_at(self, pos):
+        w, k = int((pos.x() - self.LEFT) // self.CELL), int((pos.y() - self.TOP) // self.CELL)
+        if pos.x() < self.LEFT or not (0 <= w < self.weeks() and 0 <= k < 7):
+            return None
+        d = self.start() + timedelta(days=7 * w + k)
+        return d if d <= self.st["today"] else None
+
+    def mouseMoveEvent(self, e):
+        d = self.day_at(e.position())
+        if d is None:
+            QToolTip.hideText()
+            return
+        m, n = self.st["day_focus"].get(d, 0), self.st["day_thoughts"].get(d, 0)
+        bits = ([f"{fmt_minutes(m)} focus"] if m else []) + ([f"{n} {'thought' if n == 1 else 'thoughts'}"] if n else [])
+        QToolTip.showText(e.globalPosition().toPoint(), f"{d:%a} {fmt_day(d)}: " + (", ".join(bits) or "nothing"), self)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = p.font()
+        f.setPixelSize(10)
+        p.setFont(f)
+        cell, top, left, today = self.CELL, self.TOP, self.LEFT, self.st["today"]
+        p.setPen(QColor(C["faint"]))
+        for k, name in ((0, "Mon"), (2, "Wed"), (4, "Fri"), (6, "Sun")):
+            p.drawText(QRectF(0, top + k * cell, left - 6, cell), Qt.AlignRight | Qt.AlignVCenter, name)
+        shades, start, month, weeks = self.shades(), self.start(), None, self.weeks()
+        first, before = self.st["first"] or today, QColor(shades[0])
+        before.setAlphaF(0.35)                      # days before you started: barely there
+        for w in range(weeks):
+            monday = start + timedelta(days=7 * w)
+            if monday.month != month and left + w * cell + 22 <= self.width():
+                month = monday.month
+                p.setPen(QColor(C["faint"]))
+                p.drawText(QRectF(left + w * cell, 0, 40, top - 3), Qt.AlignLeft | Qt.AlignBottom, f"{monday:%b}")
+            for k in range(7):
+                d = monday + timedelta(days=k)
+                if d > today:
+                    break
+                p.setPen(QPen(QColor(C["text"]), 1.2) if d == today else Qt.NoPen)
+                p.setBrush(shades[self.level(d)] if d >= first else before)
+                p.drawRoundedRect(QRectF(left + w * cell + 1.5, top + k * cell + 1.5, cell - 3, cell - 3), 3, 3)
+        y, x = top + 7 * cell + 6, left + weeks * cell - 5 * 13 - 40
+        p.setPen(QColor(C["faint"]))
+        p.drawText(QRectF(x - 40, y, 36, 12), Qt.AlignRight | Qt.AlignVCenter, "Less")
+        p.setPen(Qt.NoPen)
+        for i, c in enumerate(shades[1:]):
+            p.setBrush(c)
+            p.drawRoundedRect(QRectF(x + i * 13, y + 1, 10, 10), 3, 3)
+        p.setPen(QColor(C["faint"]))
+        p.drawText(QRectF(x + 5 * 13 + 2, y, 36, 12), Qt.AlignLeft | Qt.AlignVCenter, "More")
+
+
+class UsageBars(QWidget):
+    """Vertical bars with a few labels underneath; the tallest in the accent, the rest softer. Hover for numbers."""
+
+    def __init__(self, values, labels, tips, parent=None, height=96):
+        super().__init__(parent)
+        self.values, self.labels, self.tips = values, labels, tips
+        self.setMouseTracking(True)
+        self.setFixedHeight(height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def slot(self):
+        return self.width() / max(1, len(self.values))
+
+    def mouseMoveEvent(self, e):
+        i = int(e.position().x() // self.slot())
+        if 0 <= i < len(self.values):
+            QToolTip.showText(e.globalPosition().toPoint(), self.tips[i], self)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = p.font()
+        f.setPixelSize(10)
+        p.setFont(f)
+        slot, h, top = self.slot(), self.height() - 16, max(self.values) if self.values else 0
+        gap = max(1.5, slot * 0.18)
+        for i, val in enumerate(self.values):
+            x = i * slot + gap / 2
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C["surface_hi"]))
+            p.drawRoundedRect(QRectF(x, 0, slot - gap, h), 3, 3)
+            if val and top:
+                bh = max(3.0, h * val / top)
+                p.setBrush(QColor(C["accent_text"]) if val == top else _blend(C["surface_hi"], C["accent_text"], .55))
+                p.drawRoundedRect(QRectF(x, h - bh, slot - gap, bh), 3, 3)
+            if self.labels[i]:
+                p.setPen(QColor(C["faint"]))
+                p.drawText(QRectF(x - 10, h + 2, slot - gap + 20, 14), Qt.AlignHCenter | Qt.AlignVCenter, self.labels[i])
+
+
+class UsageStack(QWidget):
+    """One rounded bar split by share (what became of your thoughts)."""
+
+    def __init__(self, parts, parent=None):
+        super().__init__(parent)
+        self.parts = parts                    # [(value, colour key, tip)]
+        self.setFixedHeight(14)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMouseTracking(True)
+
+    def spans(self):
+        total, x, out = sum(v for v, _c, _t in self.parts) or 1, 0.0, []
+        for v, c, tip in self.parts:
+            out.append((x, self.width() * v / total, c, tip))
+            x += self.width() * v / total
+        return out
+
+    def mouseMoveEvent(self, e):
+        for x, w, _c, tip in self.spans():
+            if x <= e.position().x() < x + w:
+                QToolTip.showText(e.globalPosition().toPoint(), tip, self)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 7, 7)
+        p.setClipPath(clip)
+        p.setPen(Qt.NoPen)
+        for x, w, c, _tip in self.spans():
+            p.setBrush(QColor(C[c]))
+            p.drawRect(QRectF(x, 0, w + 0.5, self.height()))
+
+
+class UsageList(QWidget):
+    """Name, a bar, a value: one row per item (where focus went)."""
+    ROW = 24
+
+    def __init__(self, rows, parent=None):
+        super().__init__(parent)
+        self.rows = rows                      # [(name, minutes)]
+        self.setFixedHeight(self.ROW * len(rows))
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = p.font()
+        f.setPixelSize(12)
+        p.setFont(f)
+        w, top = self.width(), max((m for _n, m in self.rows), default=0) or 1
+        name_w, val_w = w * 0.36, 52
+        bar_x, bar_w = name_w + 8, w - name_w - 8 - val_w - 8
+        for i, (name, m) in enumerate(self.rows):
+            y = i * self.ROW
+            p.setPen(QColor(C["text"]))
+            p.drawText(QRectF(0, y, name_w, self.ROW), Qt.AlignLeft | Qt.AlignVCenter,
+                       QFontMetrics(f).elidedText(name, Qt.ElideRight, int(name_w)))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C["surface_hi"]))
+            p.drawRoundedRect(QRectF(bar_x, y + 8, bar_w, 8), 4, 4)
+            p.setBrush(QColor(C["accent_text"]) if i == 0 else _blend(C["surface_hi"], C["accent_text"], .6))
+            p.drawRoundedRect(QRectF(bar_x, y + 8, max(8, bar_w * m / top), 8), 4, 4)
+            p.setPen(QColor(C["dim"]))
+            p.drawText(QRectF(w - val_w, y, val_w, self.ROW), Qt.AlignRight | Qt.AlignVCenter, fmt_minutes(m))
+
+
+class UsageReport(QWidget):
+    """The usage report, drawn from usage_stats(): your days, the big numbers, a heatmap of your days and, in full,
+    when you focus, what became of your thoughts, records, where focus went and the rest. compact (the coffee
+    card) keeps the top, the heatmap and the highlights. fill() redraws only when the numbers changed."""
+
+    def __init__(self, parent=None, compact=False):
+        super().__init__(parent)
+        self.compact = compact
+        self.setStyleSheet(f"""
+            QLabel#repHero {{ color: {C['accent_text']}; font-size: 40px; font-weight: 800; }}
+            QLabel#repHeroLbl {{ color: {C['text']}; font-size: 15px; font-weight: 700; }}
+            QLabel#repDim {{ color: {C['dim']}; font-size: 12px; }}
+            QLabel#repPill {{ color: {C['accent_text']}; background: {C['accent_soft']}; border-radius: 11px;
+                padding: 4px 10px; font-size: 12px; font-weight: 600; }}
+            QLabel#repChipOn {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
+                border-radius: 10px; padding: 2px 8px; font-size: 11px; }}
+            QLabel#repChipOff {{ color: {C['faint']}; border: 1px dashed {C['border']}; border-radius: 10px;
+                padding: 2px 8px; font-size: 11px; }}
+            QLabel#repSec {{ color: {C['dim']}; font-size: 11px; font-weight: 700; letter-spacing: 1px;
+                padding-top: 8px; }}
+            QFrame#repTile {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 10px; }}
+            QLabel#repNum {{ color: {C['accent_text']}; font-size: 24px; font-weight: 800; background: transparent;
+                border: none; }}
+            QLabel#repNumS {{ color: {C['text']}; font-size: 17px; font-weight: 700; background: transparent;
+                border: none; }}
+            QLabel#repLbl {{ color: {C['dim']}; font-size: 11px; background: transparent; border: none; }}
+            QLabel#repFact {{ color: {C['text']}; font-size: 12px; }}""")
+        self.v = QVBoxLayout(self)
+        self.v.setContentsMargins(0, 0, 0, 0)
+        self.body, self.key, self.numbers = None, None, {}
+
+    def _lab(self, text, name, parent=None, wrap=True):
+        lab = QLabel(text, parent or self.body)
+        lab.setObjectName(name)
+        lab.setWordWrap(wrap)
+        return lab
+
+    def _tiles(self, v, items, cols, big):
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        for i, (n, label, tip) in enumerate(items):
+            tile = QFrame(self.body)
+            tile.setObjectName("repTile")
+            tile.setToolTip(tip)
+            tl = QVBoxLayout(tile)
+            tl.setContentsMargins(12, 8, 12, 9)
+            tl.setSpacing(0)
+            tl.addWidget(self._lab(n, "repNum" if big else "repNumS", tile, False))
+            tl.addWidget(self._lab(label, "repLbl", tile))
+            grid.addWidget(tile, i // cols, i % cols)
+            self.numbers[label] = n
+        for c in range(cols):
+            grid.setColumnStretch(c, 1)
+        v.addLayout(grid)
+
+    def _chips(self, v, chips, cols=4):
+        """Chips four to a row, so a long set never widens the page."""
+        grid = QGridLayout()
+        grid.setSpacing(5)
+        for i, chip in enumerate(chips):
+            grid.addWidget(chip, i // cols, i % cols)
+        grid.setColumnStretch(cols, 1)
+        v.addLayout(grid)
+
+    def _sec(self, v, title):
+        v.addWidget(self._lab(title.upper(), "repSec"))
+
+    def fill(self, st):
+        key = repr(sorted((k, v) for k, v in st.items() if k != "today"))
+        if key == self.key:
+            return True
+        self.key, self.numbers = key, {}
+        if self.body:
+            self.body.hide()
+            self.body.deleteLater()
+        self.body = QWidget(self)
+        self.v.addWidget(self.body)
+        v = QVBoxLayout(self.body)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        if not st["days"]:
+            v.addWidget(self._lab(usage_headline(st), "repFact"))
+            return True
+
+        hero = QHBoxLayout()
+        hero.setSpacing(12)
+        hero.addWidget(self._lab(str(st["days"]), "repHero", wrap=False))
+        side = QVBoxLayout()
+        side.setSpacing(0)
+        side.addStretch(1)
+        side.addWidget(self._lab(f"{'day' if st['days'] == 1 else 'days'} with {APP_NAME}", "repHeroLbl"))
+        side.addWidget(self._lab(usage_headline(st), "repDim"))
+        side.addStretch(1)
+        hero.addLayout(side, 1)
+        if persona := usage_persona(st):
+            pill = self._lab(f"{persona[0]} {persona[1]}", "repPill", wrap=False)
+            pill.setToolTip(persona[2])
+            hero.addWidget(pill, 0, Qt.AlignVCenter)
+        v.addLayout(hero)
+        if not self.compact:
+            chips = []
+            for name, used in st["parts"]:
+                chip = self._lab(("✓ " if used else "") + name, "repChipOn" if used else "repChipOff", wrap=False)
+                chip.setToolTip("In use" if used else "Not tried yet")
+                chips.append(chip)
+            self._chips(v, chips)
+
+        n, done = st["parked"], st["done"]
+        pct = lambda a: f"{round(100 * a / n)}% of them" if n else ""
+        self._tiles(v, [(str(n), "thoughts parked", "Every thought you parked, minus deleted ones"),
+                        (fmt_minutes(st["focus_min"]) if st["focus_min"] else "0",
+                         f"focused in {st['focus_n']} {'round' if st['focus_n'] == 1 else 'rounds'}",
+                         f"{st['finished']} of them ran to the end"),
+                        (str(done), "done", pct(done)), (str(st["let_go"]), "let go", pct(st["let_go"]))],
+                    4, True)
+
+        self._sec(v, "Your days")
+        v.addWidget(UsageHeat(st, self.body))
+        if self.compact:
+            for emoji, line in usage_highlights(st)[:3]:
+                v.addWidget(self._lab(f"{emoji}  {line}", "repFact"))
+            return True
+        if st["streak"]:
+            v.addWidget(self._lab(f"\U0001F525  Best run: {st['streak']} focus {'day' if st['streak'] == 1 else 'days'} "
+                                  f"in a row. Now: {st['streak_now']}.", "repFact"))
+
+        if st["focus_min"]:
+            self._sec(v, "When you focus")
+            row = QHBoxLayout()
+            row.setSpacing(18)
+            hrs = st["hours"]
+            row.addWidget(UsageBars(hrs, ["0" if h == 0 else str(h) if h % 6 == 0 else "" for h in range(24)],
+                                    [f"{h:02d}:00 to {h + 1:02d}:00: {fmt_minutes(m)}" for h, m in enumerate(hrs)],
+                                    self.body), 3)
+            days = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+            row.addWidget(UsageBars(st["week"], [d[:2] for d in days],
+                                    [f"{d}: {fmt_minutes(m)}" for d, m in zip(days, st["week"])], self.body), 2)
+            v.addLayout(row)
+            peak = max(range(24), key=lambda h: hrs[h])
+            facts = [f"⏰  Your peak hour starts at {peak:02d}:00. "
+                     f"Best day: {days[max(range(7), key=lambda i: st['week'][i])]}."]
+            if persona:
+                facts.append(f"{persona[0]}  {persona[2]}.")
+            for line in facts:
+                v.addWidget(self._lab(line, "repFact"))
+
+        if n:
+            self._sec(v, "Your thoughts")
+            o = st["outcomes"]
+            parts = [(o.get(k, 0), c, f"{label}: {o.get(k, 0)}") for k, c, label in (
+                ("done", "glimmer", "Done"), ("let go", "urge", "Let go"), ("later", "idea", "Later"),
+                ("open", "dim", "Still open"), ("abandoned", "disabled", "Removed")) if o.get(k)]
+            v.addWidget(UsageStack(parts, self.body))
+            legend = "   ".join(f"<span style='color:{C[c]}'>●</span> {tip}" for _n, c, tip in parts)
+            leg = self._lab(legend, "repDim")
+            leg.setTextFormat(Qt.RichText)
+            v.addWidget(leg)
+            if st["flags"]:
+                self._chips(v, [self._lab(f"{icon} {word}  {k}", "repChipOn", wrap=False) for icon, word, k in st["flags"]])
+            facts = []
+            if st["in_focus"]:
+                facts.append(f"\U0001F9E0  {st['in_focus']} came up mid-focus and got parked instead of followed"
+                             + (f", about {st['per_focus_hour']:.1f} per focus hour." if st["per_focus_hour"] else "."))
+            if st["to_done_h"] is not None:
+                h = st["to_done_h"]
+                facts.append("✅  Half of what you finish is done within "
+                             + (f"{round(h * 60)} min." if h < 1 else f"{h:.0f} h." if h < 48 else f"{h / 24:.0f} days."))
+            if st["busy_day"] and st["busy_day"][1] > 1:
+                facts.append(f"\U0001F4A5  Busiest day: {fmt_day(st['busy_day'][0])}, {st['busy_day'][1]} thoughts parked.")
+            for line in facts:
+                v.addWidget(self._lab(line, "repFact"))
+
+        recs = []
+        if st["longest"]:
+            recs.append((fmt_minutes(st["longest"][0]), f"longest round, {fmt_day(st['longest'][1])}", ""))
+        if st["stretch"] and st["stretch"][0] > 1:
+            recs.append((fmt_minutes(st["stretch"][1]), f"longest stretch, {st['stretch'][0]} rounds back to back, "
+                         f"{fmt_day(st['stretch'][2])}", "Rounds 20 min or less apart"))
+        if st["big_day"]:
+            recs.append((fmt_minutes(st["big_day"][1]), f"biggest focus day, {fmt_day(st['big_day'][0])}", ""))
+        if st["streak"] > 1:
+            recs.append((f"{st['streak']} days", "best run of focus days", ""))
+        if recs:
+            self._sec(v, "Records")
+            self._tiles(v, recs, 2, False)
+
+        if st["purposes"] or st["apps"]:
+            self._sec(v, "Where focus went")
+            for title, rows in (("What your rounds were for", st["purposes"]), ("Apps during focus", st["apps"])):
+                if rows:
+                    v.addWidget(self._lab(title, "repDim"))
+                    v.addWidget(UsageList(rows, self.body))
+
+        rest = [(str(a), label, tip) for a, label, tip in (
+            (st["checkins"], f"check-ins answered of {st['checkins_all']}", "Snoozed and missed ones don't count"),
+            (st["reminders"], "reminders rang" + (f", {st['snoozes']} snoozed" if st["snoozes"] else ""), ""),
+            (st["breaks"], f"breaks, {fmt_minutes(st['break_min'])}" + (f", {st['stretched']} stretched"
+                                                                        if st["stretched"] else ""), ""),
+            (st["caught"], "blocked app tries stopped", ""), (st["photos"], "daily photos", ""),
+            (st["itches"], "itches acted on", "")) if a]
+        if rest:
+            self._sec(v, "And the rest")
+            self._tiles(v, rest, 3, False)
+        return True
+
+
+class CoffeeCard(RoundedWindow):
+    """Now and then, for regulars (coffee_nudge_due): the usage report beside the circle with a coffee link.
+    Buy me a coffee opens the page and it never asks again; Don't ask again turns stats_nudge off; Maybe later,
+    the X or Esc wait a month."""
+    W = 480
+
+    def __init__(self, store):
+        super().__init__(Qt.Tool | Qt.WindowStaysOnTopHint, accent_border=True)
+        self.store = store
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setStyleSheet(STYLE + f"""
+            QLabel#head {{ color: {C['accent_text']}; font-size: 12px; font-weight: 700; }}
+            QLabel#quip {{ color: {C['text']}; font-size: 15px; font-weight: 600; }}
+            QLabel#ask {{ color: {C['dim']}; font-size: 12px; }}
+            QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
+                padding: 6px 12px; border-radius: 8px; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: #b54552; }}
+            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}""")
+        m = self.SHADOW
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20 + m, 16 + m, 20 + m, 16 + m)
+        lay.setSpacing(12)
+        top = QHBoxLayout()
+        head = QLabel("Your stats so far", self)
+        head.setObjectName("head")
+        x = QToolButton(self)
+        x.setText("\u2715")
+        x.setToolTip("Close")
+        x.clicked.connect(self.hide)
+        top.addWidget(head, 1)
+        top.addWidget(x)
+        lay.addLayout(top)
+        self.quip = QLabel(self)
+        self.quip.setObjectName("quip")
+        self.quip.setWordWrap(True)
+        lay.addWidget(self.quip)
+        self.report = UsageReport(self, compact=True)
+        lay.addWidget(self.report)
+        ask = QLabel("This app is free, with no ads and nothing sent anywhere. If it's helping you, a coffee "
+                     "keeps it going. \U0001F49B", self)
+        ask.setObjectName("ask")
+        ask.setWordWrap(True)
+        lay.addWidget(ask)
+        btns = QHBoxLayout()
+        self.b_coffee = QPushButton("Buy me a coffee \u2615", self)
+        self.b_coffee.setObjectName("primary")
+        self.b_coffee.clicked.connect(self.coffee)
+        self.b_later = QPushButton("Maybe later", self)
+        self.b_later.setObjectName("ghost")
+        self.b_later.clicked.connect(self.hide)
+        self.b_never = QPushButton("Don't ask again", self)
+        self.b_never.setObjectName("ghost")
+        self.b_never.setToolTip("Your stats stay in Settings > Your stats")
+        self.b_never.clicked.connect(self.never)
+        for b in (self.b_coffee, self.b_later, self.b_never):
+            b.setCursor(Qt.PointingHandCursor)
+            btns.addWidget(b)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+
+    def show_for(self, circle_rect, st):
+        hrs = round(st["focus_min"] / 60)
+        focus = f" and {hrs} {'hour' if hrs == 1 else 'hours'} of focus" if hrs else ""
+        self.quip.setText(f"That's {st['parked']} {'thought' if st['parked'] == 1 else 'thoughts'} out of your "
+                          f"head{focus}. Nice work.")
+        self.report.fill(st)
+        self.store.settings["coffee_nudge_at"] = time.time()
+        self.store.save()
+        screen_for(self, circle_rect.center())
+        self.setFixedWidth(self.W)
+        self.layout().activate()
+        h = self.layout().minimumHeightForWidth(self.W) if self.layout().hasHeightForWidth() else self.sizeHint().height()
+        self.setFixedHeight(max(h, self.sizeHint().height()))
+        area = (QGuiApplication.screenAt(circle_rect.center()) or QGuiApplication.primaryScreen()).availableGeometry()
+        x = (circle_rect.left() - self.W - 4 if circle_rect.center().x() > area.center().x()
+             else circle_rect.right() + 4)
+        y = circle_rect.center().y() - self.height() // 2
+        self.move(max(area.left(), min(x, area.right() - self.W)), max(area.top(), min(y, area.bottom() - self.height())))
+        self.show()
+        apply_share_privacy(self)
+
+    def coffee(self):
+        QDesktopServices.openUrl(QUrl(COFFEE_URL))
+        self.store.settings["coffee_clicked"] = True
+        self.store.save()
+        self.hide()
+
+    def never(self):
+        self.store.settings["stats_nudge"] = False
+        self.store.save()
+        self.hide()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.hide()
+        else:
+            super().keyPressEvent(e)
+
+
 class SettingsWindow(QWidget):
     """All settings in one window: groups on the left, each page grouped into cards with switches, sliders,
     segmented choices and previews. Every change applies at once (no OK button). `ctx` carries the callbacks
     from main() (set_setting, set_look, set_opacity, ...), so the window holds no app logic of its own."""
     PAGES = [("appearance", "\U0001F3A8", "Appearance"), ("focus", "⏱️", "Focus & breaks"),
-             ("checkins", "\U0001F4AC", "Check-ins"), ("sound", "\U0001F3A7", "Sound & peeks"),
+             ("checkins", "\U0001F4AC", "Check-ins"), ("blocker", "\U0001F6AB", "App blocker"), ("sound", "\U0001F3A7", "Sound & peeks"),
              ("calendar", "\U0001F4C5", "Calendar"),
              ("flags", "\U0001F6A9", "Flags"), ("controls", "⌨️", "Controls"),
-             ("privacy", "\U0001F512", "Privacy & data"), ("about", "ℹ️", "About")]
+             ("privacy", "\U0001F512", "Privacy & data"), ("stats", "\U0001F4CA", "Your stats"),
+             ("about", "ℹ️", "About")]
 
     push_result = Signal(bool, str)
 
@@ -20443,6 +21829,8 @@ class SettingsWindow(QWidget):
             area = getattr(self, "page_" + key)()
             holder.layout().addWidget(area)
             self.builders[key] = area
+        elif key == "stats":                      # counted again each time you come back to it
+            self.stats_report.fill(usage_stats(self.ctx.store))
         self.stack.setCurrentIndex(row)
 
     def _calendar_changed(self):
@@ -20931,11 +22319,153 @@ class SettingsWindow(QWidget):
         v.addStretch(1)
         return area
 
+    def page_blocker(self):
+        bl = self.ctx.blocker
+        area, v = self._page("App blocker", "Keeps the apps you pick closed while you focus. Opening one closes it "
+                                            "again with a low tone. Messages wait and show up when the app opens.")
+        gl = self._group(v, "Now")
+        stat = QLabel(bl.status() or "Not blocking.")
+        stat.setObjectName("rowTitle")
+        stat.setWordWrap(True)
+        gl.addWidget(stat)
+        self.block_status = stat
+        box = QWidget()
+        hb = QHBoxLayout(box)
+        hb.setContentsMargins(0, 0, 0, 6)
+        hb.setSpacing(6)
+
+        def start(minutes):
+            self._set("block_min", minutes)
+            if not bl.begin(minutes):
+                stat.setText("Pick at least one app below first.")
+        if bl.block:
+            if not bl.on_break():
+                for m in bl.breaks():
+                    hb.addWidget(self._button(f"Break {m} min", lambda _=False, n=m: bl.take_break(n)))
+            hb.addWidget(self._button("Stop blocking", bl.ask_stop))
+        else:
+            for m in (25, 50, 90):
+                hb.addWidget(self._button(f"{m} min", lambda _=False, n=m: start(n)))
+            spin = QSpinBox(box)
+            spin.setRange(1, 480)                # 1 to try it out; it used to start at 5 and keep 60 for a typed 1
+            spin.setSingleStep(5)
+            spin.setValue(int(self._s("block_min", 60)))
+            spin.setAccessibleName("Block for how many minutes")
+            hb.addWidget(spin)
+            unit = QLabel("min", box)
+            unit.setObjectName("rowDesc")
+            hb.addWidget(unit)
+            hb.addWidget(self._button("Block", lambda: start(spin.value())))
+        hb.addStretch(1)
+        gl.addWidget(box)
+        self._toggle(gl, "Block in every focus session", "Each focus session closes these apps and keeps them "
+                     "closed until it ends.", "block_with_focus", False)
+
+        gl = self._group(v, "Apps to block")
+        search = QLineEdit()
+        search.setPlaceholderText("Search, or type an app name and press Enter")
+        search.setAccessibleName("Search apps")
+        lst = QListWidget()
+        lst.setObjectName("blockList")
+        lst.setMinimumHeight(220)
+        lst.setAccessibleName("Apps to block")
+        gl.addWidget(search)
+        sel = QHBoxLayout()
+        sel.setSpacing(6)
+        gl.addLayout(sel)
+        gl.addWidget(lst)
+        hint = QLabel("Apps open now, apps from your focus log, and the ones you picked. Click or press Space to tick. "
+                      "Web apps sit under their browser; blocking the browser closes them too.")
+        hint.setObjectName("rowDesc")
+        hint.setWordWrap(True)
+        gl.addWidget(hint)
+        self.block_list, self.block_search = lst, search
+        picks = bl.picks()
+        running = windowed_apps()
+        seen = set()
+        for r in read_jsonl(FOCUS_LOG):
+            seen.update(str(a.get("app", "")).lower() for a in r.get("apps") or [])
+        pwas = installed_pwas()
+        order = (picks + sorted(running, key=app_nice) +
+                 sorted((a for a in seen if a and a != "unknown" and a not in BLOCK_NEVER), key=app_nice) +
+                 sorted({br for _n, br in pwas.values()}, key=app_nice))
+
+        def add(exe, checked):
+            nice = app_nice(exe)
+            web = exe.startswith("pwa:")
+            it = QListWidgetItem(f"      {nice}   (web app)" if web else nice if nice.lower() == exe else
+                                 f"{nice}   ({exe})")
+            if web:
+                it.setToolTip(f"Closes only this web app's window. Blocking {app_nice(pwas.get(exe[4:], ('', 'chrome'))[1])} "
+                              "closes it too.")
+            it.setData(Qt.UserRole, exe)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            if exe in running:
+                it.setToolTip(running[exe])
+            lst.addItem(it)
+            return it
+        for exe in dict.fromkeys(e for e in order if not e.startswith("pwa:")):
+            add(exe, exe in picks)
+            for a, (name, br) in sorted(pwas.items(), key=lambda kv: kv[1][0].lower()):
+                if br == exe:
+                    add(f"pwa:{a}", f"pwa:{a}" in picks)
+        for exe in picks:
+            if exe.startswith("pwa:") and exe[4:] not in pwas:     # picked, since uninstalled
+                add(exe, True)
+
+        def save(_item=None):
+            self._set("block_apps", [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                                     if lst.item(i).checkState() == Qt.Checked])
+        lst.itemChanged.connect(save)
+
+        def tick_all(on):
+            lst.blockSignals(True)
+            for i in range(lst.count()):
+                if not lst.isRowHidden(i):
+                    lst.item(i).setCheckState(Qt.Checked if on else Qt.Unchecked)
+            lst.blockSignals(False)
+            save()
+        sel.addWidget(self._button("Select all", lambda: tick_all(True)))
+        sel.addWidget(self._button("Deselect all", lambda: tick_all(False)))
+        sel.addStretch(1)
+        lst.itemActivated.connect(lambda it: it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                                                              else Qt.Checked))
+
+        def filt(text):
+            t = text.strip().lower()
+            for i in range(lst.count()):
+                it = lst.item(i)
+                lst.setRowHidden(i, bool(t) and t not in it.text().lower())
+
+        def enter():
+            t = search.text().strip().lower().removesuffix(".exe")
+            if not t:
+                return
+            shown = [lst.item(i) for i in range(lst.count()) if not lst.isRowHidden(i)]
+            exact = next((it for it in shown if it.data(Qt.UserRole) == t), None)
+            it = exact or (shown[0] if len(shown) == 1 else None)
+            if it is None and t not in BLOCK_NEVER:
+                it = add(t, False)
+            if it is not None:
+                it.setCheckState(Qt.Checked)
+                search.clear()
+        search.textChanged.connect(filt)
+        search.returnPressed.connect(enter)
+
+        gl = self._group(v, "Good to know")
+        self._row(gl, "When it ends", "The circle says your apps are unblocked and how often you tried. Open them "
+                  "when you want them.")
+        self._row(gl, "Calls are safe", "While the mic or camera is in use, blocked apps stay open.")
+        self._row(gl, "Apps only", "Websites in a browser aren't blocked. Block the whole browser if you need to.")
+        v.addStretch(1)
+        return area
+
     def page_sound(self):
         ctx = self.ctx
         area, v = self._page("Sound & peeks", "Background noise to mask the room, and small reminders during focus.")
         gl = self._group(v, "Background noise")
-        self._toggle(gl, "Play noise", "Also on the ♫ button in the list.", "noise_on", False,
+        self._toggle(gl, "Play noise", "Also on the music note in the list.", "noise_on", False,
                      lambda on: ctx.noise_sync())
         cards = QWidget()
         cl = QHBoxLayout(cards)
@@ -20964,7 +22494,7 @@ class SettingsWindow(QWidget):
         if ctx.music.track in songs:
             box.setCurrentIndex(songs.index(ctx.music.track) + 1)
         box.currentIndexChanged.connect(lambda i: ctx.music_pick(songs[i - 1], True) if i else ctx.music.stop())
-        self._row(gl, "Song on repeat", "Songs from the music folder. Also on the ♫ button in the list.", box)
+        self._row(gl, "Song on repeat", "Songs from the music folder. Also on the music note in the list.", box)
         self._row(gl, "Add songs", "Drop audio files in, then reopen Settings.",
                   self._button("Open music folder", ctx.open_music_folder))
         gl = self._group(v, "Note reminders")
@@ -21200,7 +22730,8 @@ class SettingsWindow(QWidget):
         gl = self._group(v, "Help")
         days = max(0, TIPS_DAYS - int((time.time() - TIPS["first_seen"]) / 86400))
         self._seg(gl, "Hover tips", f"Auto shows them for your first week ({days} day{'s' if days != 1 else ''} left), "
-                  "then keeps out of your way.", [("auto", "Auto"), ("on", "Always"), ("off", "Off")],
+                  "then keeps out of your way. Icon buttons always show their names.", [("auto", "Auto"), ("on", "Always"),
+                                                                           ("off", "Off")],
                   TIPS["mode"], lambda k: (self._set("tips", k), TIPS.update(mode=k)))
         gl = self._group(v, "Dropping files on the circle")
         self._toggle(gl, "Ask what to keep", "After a drop: keep the file and its name, just the file, or just the "
@@ -21253,6 +22784,24 @@ class SettingsWindow(QWidget):
         v.addStretch(1)
         return area
 
+    def page_stats(self):
+        area, v = self._page("Your stats", "Counted on this PC from your own logs. Nothing leaves it.")
+        rep = self.stats_report = UsageReport()
+        v.addWidget(rep)
+        rep.fill(usage_stats(self.ctx.store))
+        tick = QTimer(rep)
+        tick.timeout.connect(lambda: rep.isVisible() and rep.fill(usage_stats(self.ctx.store)))
+        tick.start(30000)
+        gl = self._group(v)
+        self._toggle(gl, "Show me my stats now and then", "A short version of this page beside the circle.",
+                     "stats_nudge", True)
+        v.addStretch(1)
+        return area
+
+    def _coffee(self, _=False):
+        QDesktopServices.openUrl(QUrl(COFFEE_URL))
+        self._set("coffee_clicked", True)
+
     def page_about(self):
         ctx = self.ctx
         area, v = self._page(APP_NAME, f"Version {APP_VERSION}  \u00B7  {APP_TAGLINE}")
@@ -21267,7 +22816,7 @@ class SettingsWindow(QWidget):
         self._group(v, "Why I made it").addWidget(story)
         self._row(self._group(v, "Support the developer \u2615"), "Buy me a coffee",
                   "This app is free. If it helped you, a coffee keeps it going. Thanks! \U0001F49B",
-                  self._button("Open", web(COFFEE_URL)))
+                  self._button("Open", self._coffee))
         gl = self._group(v, "Updates")
         self._row(gl, f"Version {APP_VERSION}", "Restart / update gets the newest version from GitHub. "
                   "Your notes stay.", self._button("Restart / update", ctx.restart))
@@ -21626,6 +23175,7 @@ def main():
             ctx.nudges, ctx.noise, ctx.peek, ctx.media = holder["nudges"], holder["noise"], holder["peek"], holder["media"]
             ctx.noise_sync, ctx.noise_vol, ctx.start_tour = holder["noise_sync"], holder["noise_vol"], holder["start_tour"]
             ctx.music, ctx.music_pick, ctx.open_music_folder = holder["music"], music_pick, open_music_folder
+            ctx.blocker = holder["blocker"]
             w = holder["settings_win"] = SettingsWindow(ctx)
         w.open_at(page)
 
@@ -21645,7 +23195,7 @@ def main():
                 m.addAction("Resume focus" if timer.paused else "Pause focus",
                             timer.resume if timer.paused else timer.pause)
                 m.addAction("Stop focus", timer.stop)
-                dr = m.addAction("Drifted: take out minutes...", lambda: take_out_drift(timer, None))
+                dr = m.addAction("Drifted: take out minutes...", lambda: take_out_drift(timer, None, toast))
                 dr.setToolTip(DRIFT_TIP)
                 m.setToolTipsVisible(True)
         if not timer.running:
@@ -21663,6 +23213,8 @@ def main():
             ga.setCheckable(True)
             ga.setChecked(setting(key, True))
             ga.toggled.connect(lambda on, k=key: set_setting(k, on))
+        if holder.get("blocker"):
+            fill_block_menu(m.addMenu("Block apps"))
         nz = m.addAction("Background noise")
         nz.setCheckable(True)
         nz.setChecked(setting("noise_on", False))
@@ -21689,6 +23241,32 @@ def main():
         holder["menu"] = m
         keep_menu_open(m)
         return m
+
+    def block_for():
+        n = ask(None, "Block for how many minutes", int(setting("block_min", 60)), (15, 30, 45, 120), "min", (1, 480))
+        if n:
+            set_setting("block_min", n)
+            holder["blocker"].begin(n)
+
+    def fill_block_menu(bm):
+        bl = holder["blocker"]
+        if bl.block:
+            bm.addAction(bl.status()).setEnabled(False)
+            if not bl.on_break():
+                for minutes in bl.breaks():
+                    bm.addAction(f"Take a {minutes} min break", lambda n=minutes: bl.take_break(n))
+            bm.addAction("Unblock an app for a few min...", bl.ask_unblock)
+            bm.addAction("Stop blocking...", bl.ask_stop)
+        elif bl.picks():
+            for minutes in (25, 50, 90):
+                bm.addAction(f"Block for {minutes} min", lambda n=minutes: bl.begin(n))
+            bm.addAction("Block for...", block_for)
+        bm.addSeparator()
+        fa = bm.addAction("Block in every focus session")
+        fa.setCheckable(True)
+        fa.setChecked(setting("block_with_focus", False))
+        fa.toggled.connect(lambda on: set_setting("block_with_focus", on))
+        bm.addAction("Choose apps...", lambda: open_settings("blocker"))
 
     def music_pick(path, on):
         if not on:
@@ -21755,7 +23333,7 @@ def main():
         QTimer.singleShot(1500, lambda: (store.flush_on_quit(), os._exit(0)))
 
     def toast(msg, ms=4500):
-        QToolTip.showText(bubble.mapToGlobal(QPoint(0, 40)), msg, bubble, bubble.rect(), ms)
+        speech.say(bubble.geometry(), msg, timeout_ms=ms)
 
     def fill_ai_menu(menu):
         menu.addAction("Browse history...", panel.open_history)
@@ -22007,7 +23585,7 @@ def main():
             glim = session_glimmers(store, ls["start"], ls["end"]) if flag_on(store.settings, "glimmer") else 0
             session_card.show_for(bubble.geometry(), minutes, parked, urges, dists, bm, fm, auto_break=auto,
                                   glimmers=glim, today=today_summary(store), on=ls.get("on", ""),
-                                  apps=timer.last_apps)
+                                  apps=timer.last_apps, blocked=holder["blocker"].take_tries())
             if topic and setting("ntfy_focus", False):
                 send_phone_push(topic, "Focus session done", f"{fmt_min(minutes)} min done. Time for a break.", priority=3)
         if setting("timer_sound", True):
@@ -22075,6 +23653,36 @@ def main():
     holder["speech"] = speech
     nudges = NudgeManager(store, timer, bubble, speech, lambda: holder.get("guard"), calendar)
     holder["nudges"] = nudges
+    blocker = nudges.blocker = holder["blocker"] = AppBlocker(store, timer, nudges)
+    bubble.on_hold = blocker.ask_unblock
+
+    def block_popup(anchor):
+        m = QMenu(panel)
+        m.setStyleSheet(STYLE)
+        fill_block_menu(m)
+        m.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def block_tick():
+        """The list's block button: lit, with the minutes left on it and the status as its tip, while blocking."""
+        on = bool(blocker.block)
+        panel.block_btn.set_on(on)
+        panel.block_btn.set_badge(blocker.badge())
+        panel.block_btn.setToolTip(blocker.status() if on else "Block apps")
+    blocker.qt.timeout.connect(block_tick)
+    badge_qt = QTimer(panel)                     # the badge counts down by the second (the sweep is 1.5 s)
+    badge_qt.timeout.connect(lambda: panel.block_btn.set_badge(blocker.badge()))
+    badge_qt.start(1000)
+
+    def block_sync():
+        """The list's block button: lit with the status as its tip while blocking; Settings follows a block that
+        starts, stops or goes on a break."""
+        block_tick()
+        w = holder.get("settings_win")
+        if w is not None and w.isVisible() and w.PAGES[w.side.currentRow()][0] == "blocker":
+            QTimer.singleShot(0, lambda: w.open_at("blocker"))   # not inside the page's own button handler
+    panel.block_menu = block_popup
+    blocker.changed.connect(block_sync)
+    QTimer.singleShot(0, block_sync)
     nudges.wants_focus.connect(lambda minutes: timer.start(minutes, "focus"))
     nudges.wants_break.connect(lambda minutes: timer.start(minutes, "break"))
     nudges.wants_more_break.connect(timer.extend_break)
@@ -22143,7 +23751,7 @@ def main():
         elif not want and noise.playing:
             noise.stop()
         on = setting("noise_on", False)
-        panel.noise_btn.setStyleSheet(f"color: {C['accent_text']};" if on else "")
+        panel.noise_btn.set_on(on)
 
     def fill_noise_menu(menu):
         on = menu.addAction("Play")
@@ -22345,6 +23953,23 @@ def main():
             restarting.append(True)
             store.flush_on_quit()
             relaunch(auto["ready"])
+
+    def coffee_check():
+        """The coffee card (coffee_nudge_due), only while you're here and nothing else is going on: no focus or
+        break, no block, no other window open."""
+        others = [w for w in QApplication.topLevelWidgets() if w.isVisible() and
+                  w not in (bubble, meeting_badge) and w.windowType() != Qt.ToolTip]
+        if timer.running or timer.overrun_since or blocker.block or others or idle_seconds() > 120:
+            return
+        st = coffee_nudge_due(store)
+        if st:
+            holder.setdefault("coffee", CoffeeCard(store)).show_for(bubble.geometry(), st)
+    coffee_timer = QTimer(app)
+    coffee_timer.setInterval(3600 * 1000)
+    coffee_timer.timeout.connect(coffee_check)
+    coffee_timer.start()
+    QTimer.singleShot(600000, coffee_check)
+    holder["coffee_check"] = coffee_check
     update_timer = QTimer(app)
     update_timer.setInterval(6 * 3600 * 1000)
     update_timer.timeout.connect(auto_check)
