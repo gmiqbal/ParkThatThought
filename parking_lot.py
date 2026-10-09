@@ -84,8 +84,11 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.6"
+APP_VERSION = "1.6.1"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.6.1", "9 Oct 2026", "A richer, smoother look", ("Notes, the circle, the quick note, the calendar, the meeting bar and Settings get a softer, lit look.",
+                           "Hovers and presses ease in and out. Turning off animations in Windows turns that off too.",
+                           "Park a note and the plane flies off, with a tick in its place.")),
     ("1.6", "9 Oct 2026", "Block distracting apps, see your stats", ("App blocker: pick apps from a list and block them for a while or in every focus session.",
                            "Web apps like ChatGPT get their own tick under their browser. Select all and Deselect all.",
                            "Open a blocked app anyway: Pause it for a few minutes, or stop the block for it or for all.",
@@ -1034,7 +1037,7 @@ C = dict(bg="#1b1c1f", surface="#24262a", surface_hi="#2b2d32", field="#202226",
          toast="#33363d", toast_border="#4a4d55", undo="#f3b4bc", cream="#f3e3c3", warn="#f0c16c",
          ok_soft="#80c2a1", timer="#f0d58a", brk="#4fb6a8", brk_bg="#1c3431", disabled="#45474d",
          rem_fg="#ffe0a4", rem_bg="#403627", rem_border="#8d6c3d", rem_hover="#55452e", glow="#262830",
-         hint_bg="#2f3238", hint_border="#5a5e67")
+         hint_bg="#2f3238", hint_border="#5a5e67", accent_hover="#b8465a")
 DARK = dict(C)
 # Light twin of every key. A dark value shared by two keys keeps one light value, and no light value repeats a
 # dark one, so a stylesheet built in either theme can be recoloured by swapping hex codes (see apply_theme).
@@ -1047,7 +1050,7 @@ LIGHT = dict(DARK, bg="#f3f4f6", surface="#ffffff", surface_hi="#eaecef", field=
              toast="#fdfdfe", toast_border="#c9ccd3", undo="#8e2c39", cream="#7a4f12", warn="#9a6400",
              ok_soft="#2d8a5c", timer="#8a6a10", brk="#186e63", brk_bg="#dff1ee", disabled="#b9bcc3",
              rem_fg="#7a5410", rem_bg="#fbefd8", rem_border="#d9b77a", rem_hover="#f5e2bd", glow="#fefefe",
-             hint_bg="#fcfcfd", hint_border="#b8bcc4")
+             hint_bg="#fcfcfd", hint_border="#b8bcc4", accent_hover="#86283a")
 THEME = {"mode": "system", "hooks": []}    # hooks: things that bake a colour outside a stylesheet re-run on a switch
 
 
@@ -1173,7 +1176,7 @@ def custom_flag_css():
                                                             (q.blue(), base.blue())))).name()
         out.append(f'QLabel#chip[kind="{k}"] {{ color: {col}; background: {bg}; border: 1px solid {col}; }}'
                    f'QToolButton#flag[kind="{k}"]:checked {{ color: {col}; background: {bg}; border-color: {col}; }}'
-                   f'QFrame#card[stripe="{k}"] {{ border-left: 3px solid {col}; }}')
+                   f'QFrame#card[tint="{k}"] {{ background: {bg}; }}')
     return "\n".join(out)
 
 
@@ -1446,8 +1449,8 @@ QLabel#appSub {{ color: {C['faint']}; font-size: 11px; padding-left: 3px; }}
 QWidget#roundwin {{ background: transparent; color: {C['text']}; }}
 QWidget#list, QWidget#listwrap {{ background: transparent; }}
 QScrollArea {{ border: none; background: transparent; }}
-QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 3px; min-height: 30px; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 1px; }}
+QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 3px; min-height: 32px; margin: 0 1px; }}
 QScrollBar::handle:vertical:hover {{ background: {C['faint']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical {{ height: 0; background: none; }}
@@ -1456,26 +1459,24 @@ QLabel#hint {{ color: {C['faint']}; font-size: 11px; }}
 QLabel#attachHint {{ color: {C['faint']}; font-size: 11px; padding-left: 2px; }}
 QLabel#emptyTitle {{ color: {C['text']}; font-size: 15px; font-weight: 600; }}
 QLabel#emptyText {{ color: {C['dim']}; font-size: 12px; }}
-QLabel#chip {{ border-radius: 4px; padding: 0px 6px; font-size: 10px; font-weight: 600; }}
+QLabel#chip {{ border-radius: 8px; padding: 0px 7px; font-size: 10px; font-weight: 600; }}
 QLabel#chip[kind="urgent"] {{ color: {C['urgent']}; background: {C['urgent_bg']}; border: 1px solid {C['urgent']}; font-weight: 700; }}
-QLabel#chip[kind="dist"] {{ color: {C['dist']}; background: {C['dist_bg']}; border: 1px solid {C['dist']}; }}
-QLabel#chip[kind="urge"] {{ color: {C['urge']}; background: {C['urge_bg']}; border: 1px solid {C['urge']}; }}
-QLabel#chip[kind="glimmer"] {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; border: 1px solid {C['glimmer']}; }}
-QLabel#chip[kind="anti"] {{ color: {C['anti']}; background: {C['anti_bg']}; border: 1px solid {C['anti']}; }}
-QLabel#chip[kind="idea"] {{ color: {C['idea']}; background: {C['idea_bg']}; border: 1px solid {C['idea']}; }}
+QLabel#chip[kind="dist"] {{ color: {C['dist']}; background: {C['dist_bg']}; border: 1px solid {C['dist_bg']}; }}
+QLabel#chip[kind="urge"] {{ color: {C['urge']}; background: {C['urge_bg']}; border: 1px solid {C['urge_bg']}; }}
+QLabel#chip[kind="glimmer"] {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; border: 1px solid {C['glimmer_bg']}; }}
+QLabel#chip[kind="anti"] {{ color: {C['anti']}; background: {C['anti_bg']}; border: 1px solid {C['anti_bg']}; }}
+QLabel#chip[kind="idea"] {{ color: {C['idea']}; background: {C['idea_bg']}; border: 1px solid {C['idea_bg']}; }}
 QToolButton#flag[kind="idea"]:checked {{ color: {C['idea']}; background: {C['idea_bg']}; border-color: {C['idea']}; }}
-QFrame#card[stripe="idea"] {{ border-left: 3px solid {C['idea']}; }}
 QToolButton#flag[kind="glimmer"] {{ color: {C['glimmer']}; font-weight: 700; }}
 QToolButton#flag[kind="antiglimmer"] {{ color: {C['anti']}; font-weight: 700; }}
 QToolButton#flag[kind="glimmer"]:checked {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; border-color: {C['glimmer']}; font-weight: 700; }}
 QToolButton#flag[kind="antiglimmer"]:checked {{ color: {C['anti']}; background: {C['anti_bg']}; border-color: {C['anti']}; font-weight: 700; }}
-QFrame#card[stripe="glimmer"] {{ border-left: 3px solid {C['glimmer']}; }}
-QFrame#card[stripe="anti"] {{ border-left: 3px solid {C['anti']}; }}
 QFrame#card[tint="glimmer"] {{ background: {C['glimmer_bg']}; }}
 QLabel#chipDist {{ color: {C['dist']}; background: {C['dist_bg']}; border: 1px solid {C['dist']};
     border-radius: 4px; padding: 0px 6px; font-size: 10px; font-weight: 600; }}
 QToolButton#flag {{ color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 2px 9px;
     font-size: 11px; }}
+QToolButton#flag:hover {{ color: {C['text']}; background: {C['surface_hi']}; border-color: {C['faint']}; }}
 QToolButton#flag:focus {{ border: 1px solid {C['text']}; }}
 QToolButton#remChip {{ color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 2px 9px;
     font-size: 11px; }}
@@ -1532,9 +1533,11 @@ QLabel#dropHint {{ color: {C['cream']}; background: {C['accent_soft']}; border: 
 QLabel#timerChip {{ color: {C['timer']}; font-size: 12px; }}
 QFrame#timerBar {{ background: {C['surface']}; border-radius: 8px; }}
 QToolButton#timerBtn {{ color: {C['text']}; font-size: 12px; padding: 3px 8px; }}
-QToolButton#startFocus {{ color: white; background: {C['accent']}; border: none; border-radius: 10px;
+QToolButton#startFocus {{ color: white; border: none; border-radius: 10px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']});
     padding: 4px 11px 4px 8px; font-size: 12px; font-weight: 600; }}
-QToolButton#startFocus:hover {{ background: #b8465a; }}
+QToolButton#startFocus:hover {{ background: {C['accent_hover']}; }}
+QToolButton#startFocus:pressed {{ background: {C['accent']}; }}
 QToolButton#startBreak {{ color: {C['brk']}; background: transparent; border: 1px solid {C['brk']}; border-radius: 10px;
     padding: 3px 11px 3px 8px; font-size: 12px; font-weight: 600; }}
 QToolButton#startBreak:hover {{ background: {C['brk_bg']}; }}
@@ -1559,9 +1562,10 @@ QLineEdit, QPlainTextEdit {{ background: {C['field']}; color: {C['text']}; borde
     border-radius: 8px; padding: 5px; selection-background-color: {C['accent']}; }}
 QLineEdit:focus {{ border: 1px solid {C['accent']}; }}
 QLineEdit#quick {{ padding: 9px 10px; font-size: 13px; }}
-QPlainTextEdit#quick {{ padding: 5px 6px; font-size: 13px; }}
+QPlainTextEdit#quick {{ padding: 6px 7px; font-size: 13px; border-radius: 10px; }}
+QPlainTextEdit#quick:hover, QPlainTextEdit#qdetails:hover {{ border-color: {C['faint']}; }}
 QPlainTextEdit#quick:focus {{ border: 1px solid {C['accent']}; }}
-QPlainTextEdit#qdetails {{ font-size: 12px; padding: 2px 6px; }}
+QPlainTextEdit#qdetails {{ font-size: 12px; padding: 2px 6px; border-radius: 10px; }}
 QPlainTextEdit#qdetails:focus {{ border: 1px solid {C['accent']}; }}
 QTextEdit {{ background: transparent; color: {C['text']}; border: none; selection-background-color: {C['accent']}; }}
 QTextEdit#title {{ font-size: 13px; font-weight: 600; }}
@@ -1570,9 +1574,6 @@ QTextEdit#details:focus {{ background: {C['field']}; border-radius: 5px; color: 
 QFrame#card {{ background: {C['surface']}; border: 1px solid transparent; border-radius: 10px; }}
 QFrame#card[tint="urge"] {{ background: {C['urge_bg']}; }}
 QFrame#card[tint="urgent"] {{ background: {C['urgent_bg']}; }}
-QFrame#card[stripe="urge"] {{ border-left: 3px solid {C['urge']}; }}
-QFrame#card[stripe="dist"] {{ border-left: 3px solid {C['dist']}; }}
-QFrame#card[stripe="urgent"] {{ border-left: 3px solid {C['urgent']}; }}
 QFrame#card[done="true"] {{ background: {C['done']}; }}
 QFrame#card[drag="true"] {{ border: 1px dashed {C['accent']}; }}
 QFrame#actions {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 11px; }}
@@ -1589,9 +1590,11 @@ QToolButton#help:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
 QToolButton#headBtn {{ border: none; border-radius: 8px; background: transparent; }}
 QToolButton#headBtn:hover, QToolButton#headBtn:focus {{ background: {C['surface_hi']}; }}
 QToolButton#headBtn:pressed {{ background: {C['border']}; }}
-QToolButton#send {{ color: white; background: {C['accent']}; border: none; border-radius: 11px; padding: 3px 12px;
+QToolButton#send {{ color: white; border: none; border-radius: 11px; padding: 3px 12px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']});
     font-size: 12px; font-weight: 600; }}
-QToolButton#send:hover {{ background: #b8465a; }}
+QToolButton#send:hover {{ background: {C['accent_hover']}; }}
+QToolButton#send:pressed {{ background: {C['accent']}; }}
 QToolButton#send:disabled {{ color: {C['faint']}; background: {C['surface_hi']}; }}
 QToolButton#filterChip {{ color: {C['text']}; background: {C['accent_soft']}; border: 1px solid {C['accent']};
     border-radius: 9px; padding: 1px 8px; font-size: 11px; }}
@@ -1608,9 +1611,9 @@ QTabBar::tab:hover {{ color: {C['text']}; }}
 QLabel#tabCount {{ background: {C['surface_hi']}; color: {C['dim']}; border: 1px solid {C['border']};
     border-radius: 8px; font-size: 10px; font-weight: 600; padding: 0px 5px; min-width: 6px; max-height: 15px; }}
 QFrame#helpPop {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 10px; }}
-QMenu {{ background: {C['surface_hi']}; color: {C['text']}; border: 1px solid {C['border']}; padding: 4px; }}
-QMenu::item {{ padding: 5px 18px; border-radius: 4px; }}
-QMenu::item:selected {{ background: {C['accent']}; }}
+QMenu {{ background: {C['surface_hi']}; color: {C['text']}; border: 1px solid {C['border']}; padding: 5px; }}
+QMenu::item {{ padding: 6px 20px 6px 14px; border-radius: 6px; }}
+QMenu::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
 QMenu::item:disabled {{ color: {C['faint']}; }}
 QMenu::separator {{ height: 1px; background: {C['border']}; margin: 4px 6px; }}
 """
@@ -6288,7 +6291,8 @@ class Bubble(QWidget):
         self.scale = 1.0
         self.drop_handler = None     # callable(QMimeData) -> bool, set by main()
         self._drag_hover = False
-        self._hover = False
+        self.hover_e = Ease(self)            # 0..1, eases in on hover (brighter top, a touch bigger)
+        self.press_e = Ease(self, ms=110)    # 0..1, eases in on press (a touch smaller)
         self._press = None
         self._dragging = False
         self.on_hold = None          # callable() -> bool (True when it used the press), set by main()
@@ -6310,6 +6314,9 @@ class Bubble(QWidget):
         self.anim = QTimer(self)
         self.anim.setInterval(33)    # ~30 fps, only while something is animating
         self.anim.timeout.connect(self._animate)
+        self.breath = QTimer(self)
+        self.breath.setInterval(70)  # ~14 fps, only while idle and on screen: the slow halo
+        self.breath.timeout.connect(self.update)
         self._update_tooltip()
 
     # ---- state
@@ -6420,7 +6427,16 @@ class Bubble(QWidget):
             self.anim.start()
         elif not want and self.anim.isActive():
             self.anim.stop()
+        calm = not want and self.isVisible() and not reduced_motion()
+        if calm != self.breath.isActive():
+            self.breath.start() if calm else self.breath.stop()
         self.update()
+
+    def breath_level(self):
+        """0..1, one slow breath every 6 s while idle; a steady middle when still (Show animations off, focus on)."""
+        if not self.breath.isActive():
+            return 0.5
+        return 0.5 - 0.5 * math.cos((time.monotonic() - self._t0) * 2 * math.pi / 6.0)
 
     def _tip_point(self, frac):
         """Point on the ring at 'frac' of a full turn, clockwise from 12 o'clock."""
@@ -6627,14 +6643,31 @@ class Bubble(QWidget):
         S, c, R, B = self.SIZE, self.SIZE / 2, self.RING_R, self.BODY_R
         now = time.monotonic() - self._t0
 
-        # soft drop shadow
-        sh = QRadialGradient(c, c + 2, B + 5)
-        sh.setColorAt(0.0, QColor(0, 0, 0, 110))
-        sh.setColorAt(0.7, QColor(0, 0, 0, 40))
-        sh.setColorAt(1.0, QColor(0, 0, 0, 0))
+        hov, prs = self.hover_e.v, self.press_e.v
+        k = 1.0 + 0.035 * hov - 0.07 * prs           # hover grows it a touch, a press pushes it in
+        _, hi, mid, lo, hov_c = CIRCLE_COLORS.get(self.body_key(), CIRCLE_COLORS["white"])
+
+        # shadow: a soft ambient one set below, and a tighter contact one; a press brings both in
+        lift = 3.2 * (1 - prs) + 1.0
         p.setPen(Qt.NoPen)
-        p.setBrush(sh)
-        p.drawEllipse(QRectF(c - B - 5, c - B - 3, 2 * (B + 5), 2 * (B + 5)))
+        for dy, rad, a0, a1 in ((lift, B + 7, 70, 26), (1.2, B + 2.5, 70, 0)):
+            sh = QRadialGradient(c, c + dy, rad * k)
+            sh.setColorAt(0.0, QColor(0, 0, 0, a0))
+            sh.setColorAt(0.65, QColor(0, 0, 0, a1))
+            sh.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setBrush(sh)
+            p.drawEllipse(QPointF(c, c + dy), rad * k, rad * k)
+
+        # halo: a slow breath of the body's own light around it, brighter on hover
+        b = self.breath_level()
+        hr = B + 6 + 1.5 * b
+        halo = QRadialGradient(c, c, hr)
+        for at, alpha in ((0.0, 0), (B / hr, int(8 + 14 * b + 22 * hov)), (1.0, 0)):
+            glow = QColor(hi)
+            glow.setAlpha(alpha)
+            halo.setColorAt(at, glow)
+        p.setBrush(halo)
+        p.drawEllipse(QPointF(c, c), hr, hr)
 
         # faint track for the outline, so the circle looks complete when idle
         p.setBrush(Qt.NoBrush)
@@ -6676,12 +6709,16 @@ class Bubble(QWidget):
             r = 0.6 + 1.1 * k
             p.drawEllipse(QRectF(x - r, y - r, 2 * r, 2 * r))
 
-        # body: soft 3D gradient
-        _, hi, mid, lo, hov = CIRCLE_COLORS.get(self.body_key(), CIRCLE_COLORS["white"])
+        # body: soft 3D gradient, scaled about the centre by hover and press
+        p.save()
+        p.translate(c, c)
+        p.scale(k, k)
+        p.translate(-c, -c)
+        top = _blend(hi, hov_c, hov)
         shape = self._body_path(c, B)
         if self.shape == "cloud":   # emoji look: bright top fading to a cool shaded underside, soft drop shadow
             body = QLinearGradient(0, c - 13 * self.scale, 0, c + 11 * self.scale)
-            body.setColorAt(0.0, QColor(hov if self._hover else hi))
+            body.setColorAt(0.0, top)
             body.setColorAt(0.5, QColor(hi))
             body.setColorAt(0.78, QColor(mid))
             body.setColorAt(1.0, QColor(lo))
@@ -6690,17 +6727,25 @@ class Bubble(QWidget):
             p.drawPath(shape.translated(0, 1.4 * self.scale))
         else:
             body = QRadialGradient(c - 5 * self.scale, c - 7 * self.scale, B * 1.6)
-            body.setColorAt(0.0, QColor(hov if self._hover else hi))
+            body.setColorAt(0.0, top)
             body.setColorAt(0.55, QColor(mid))
             body.setColorAt(1.0, QColor(lo))
         p.setPen(Qt.NoPen)
         p.setBrush(body)
+        p.drawPath(shape)
+        # sheen: a soft light across the top, so a coloured body reads as glossy (white is already bright)
+        r = shape.boundingRect()
+        sheen = QLinearGradient(0, r.top(), 0, r.top() + r.height() * 0.5)
+        sheen.setColorAt(0.0, QColor(255, 255, 255, int(42 + 24 * hov)))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setBrush(sheen)
         p.drawPath(shape)
         p.setBrush(Qt.NoBrush)
         light = self.body_key() == "white"
         # thin rim: a soft grey edge keeps a white body visible on white pages, a light rim on the dark colours
         p.setPen(QPen(QColor(120, 140, 165, 110) if light else QColor(255, 255, 255, 45), 1))
         p.drawPath(self._body_path(c, B - 0.5))
+        p.restore()
 
         # status rings outside the timer outline
         if not self.save_ok:
@@ -6743,16 +6788,16 @@ class Bubble(QWidget):
             p.drawEllipse(QRectF(c - 2.8, c - 2.8, 5.6, 5.6))
 
     def enterEvent(self, e):
-        self._hover = True
+        self.hover_e.to(1.0)
         self.fg_at_hover = (foreign_foreground(), time.monotonic())
-        self.update()
 
     def leaveEvent(self, e):
-        self._hover = False
-        self.update()
+        self.hover_e.to(0.0)
+        self.press_e.to(0.0)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
+            self.press_e.to(1.0)
             self._press = e.globalPosition().toPoint()
             self._origin = self.pos()
             self._dragging = False
@@ -6777,6 +6822,7 @@ class Bubble(QWidget):
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton or self._press is None:
             return
+        self.press_e.to(0.0)
         self._hold.stop()
         if self._dragging:
             self.moved.emit(self.pos())
@@ -8538,6 +8584,7 @@ class TaskCard(QFrame):
         outer = QHBoxLayout(self)
         self.outer = outer
         outer.setContentsMargins(10, 9, 10, 9)
+        self.hover = Ease(self)
         outer.setSpacing(9)
 
         chk = RoundCheck(task["done"])
@@ -8766,9 +8813,9 @@ class TaskCard(QFrame):
         stripe = next((kind for k, kind in (("urgent", "urgent"), ("antiglimmer", "anti"), ("distraction", "dist"),
                                             ("glimmer", "glimmer"), ("urge", "urge"), ("idea", "idea"))
                        + tuple((k, k) for k in FLAG_KEYS if k not in BUILTIN_FLAG_KEYS) if on.get(k)), "")
-        self.setProperty("stripe", stripe)
-        self.setProperty("tint", next((k for k in ("urgent", "urge", "glimmer") if on.get(k)), ""))
-        self.outer.setContentsMargins(7 if stripe else 10, 9, 10, 9)  # coloured left border is 3px
+        self.setProperty("stripe", stripe)              # painted: a wash from the left and a soft ring
+        self.setProperty("tint", next((k for k in ("urgent", "urge", "glimmer") if on.get(k)), "")
+                         or (stripe if stripe not in self.FLAG_TONE else ""))
         self.style().unpolish(self)
         self.style().polish(self)
         self._refresh_itch_status()
@@ -8927,15 +8974,42 @@ class TaskCard(QFrame):
             return owner is self
         return self.hasFocus() or any(b.hasFocus() for b in self.act_btns) or self.underMouse()
 
+    FLAG_TONE = {"urgent": "urgent", "anti": "anti", "dist": "dist", "glimmer": "glimmer", "urge": "urge",
+                 "idea": "idea"}
+
     def paintEvent(self, e):
         super().paintEvent(e)
-        if not self.is_current():
-            return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        stripe = 3 if self.property("stripe") else 0
-        r = QRectF(self.rect()).adjusted(0.75 + stripe, 0.75, -0.75, -0.75)   # starts inside the flag's colour edge
+        r = QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75)
+        dark = theme_dark()
         p.setPen(Qt.NoPen)
+        kind = self.property("stripe")
+        if kind and not self.task["done"]:
+            tone = QColor(C[self.FLAG_TONE[kind]] if kind in self.FLAG_TONE else FLAG_COLORS.get(kind, C["dim"]))
+            wash = QLinearGradient(r.left(), 0, r.left() + min(r.width(), 260.0), 0)
+            for at, a in ((0.0, 46 if dark else 26), (1.0, 0)):
+                c = QColor(tone)
+                c.setAlpha(a)
+                wash.setColorAt(at, c)
+            p.setBrush(wash)
+            p.drawRoundedRect(r, 9, 9)
+            ring = QColor(tone)
+            ring.setAlpha(70 if dark else 90)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(ring, 1))
+            p.drawRoundedRect(r, 9, 9)
+            p.setPen(Qt.NoPen)
+        p.setPen(QPen(QColor(255, 255, 255, 12) if dark else QColor(0, 0, 0, 0), 1))     # light catches the top edge
+        p.drawLine(QPointF(r.left() + 9, r.top() + 0.5), QPointF(r.right() - 9, r.top() + 0.5))
+        p.setPen(QPen(QColor(0, 0, 0, 46 if dark else 13), 1))                           # and a shade below
+        p.drawLine(QPointF(r.left() + 9, r.bottom() - 0.25), QPointF(r.right() - 9, r.bottom() - 0.25))
+        p.setPen(Qt.NoPen)
+        if not self.is_current():
+            if self.hover.v:
+                p.setBrush(veil(int(9 * self.hover.v)))
+                p.drawRoundedRect(r, 9, 9)
+            return
         p.setBrush(veil(13))                            # a touch lighter (darker on light), on any tint
         p.drawRoundedRect(r, 9, 9)
         p.setBrush(Qt.NoBrush)
@@ -9032,7 +9106,7 @@ class TaskCard(QFrame):
         super().mouseReleaseEvent(e)
 
     def enterEvent(self, e):
-        self.update()
+        self.hover.to(1.0)
         if not self._has_actions:
             return
         if any(c.pill_in_use() for c in self.panel.live_cards() if c is not self):
@@ -9045,7 +9119,7 @@ class TaskCard(QFrame):
         self.actions.raise_()
 
     def leaveEvent(self, e):
-        self.update()
+        self.hover.to(0.0)
         QTimer.singleShot(60, self.maybe_hide_pill)   # it may be on its way to the pill
 
     def resizeEvent(self, e):
@@ -9385,9 +9459,20 @@ class SendButton(QAbstractButton):
         self.setToolTip("Park it (Enter)")
         self.clicked.connect(on_click)
         self._edits = edits
+        self.hover, self.press = Ease(self), Ease(self, ms=110)
+        self.fly = Ease(self, ms=260)          # 0..1: the plane leaves and a tick takes its place
+        self._land = QTimer(self)
+        self._land.setSingleShot(True)
+        self._land.setInterval(900)
+        self._land.timeout.connect(lambda: (self.fly.anim.stop(), self.fly._step(0.0)))
         for e in edits:
             e.textChanged.connect(self.sync)
         self.sync()
+
+    def launch(self):
+        """Parked: the plane flies off, a tick shows, then the button settles back."""
+        self.fly.to(1.0)
+        self._land.start()
 
     def sync(self, *_):
         self.setEnabled(any(e.toPlainText().strip() for e in self._edits))
@@ -9400,40 +9485,83 @@ class SendButton(QAbstractButton):
         super().keyPressEvent(e)
 
     def enterEvent(self, e):
-        self.update()
+        self.hover.to(1.0)
 
     def leaveEvent(self, e):
-        self.update()
+        self.hover.to(0.0)
+        self.press.to(0.0)
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        if self.isEnabled():
+            self.press.to(1.0)
+
+    def mouseReleaseEvent(self, e):
+        self.press.to(0.0)
+        super().mouseReleaseEvent(e)
 
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        on = self.isEnabled()
-        body = QColor(C["accent"]) if on else QColor(C["surface_hi"])
-        if on and (self.underMouse() or self.isDown()):
-            body = body.lighter(118)
-        r = QRectF(2, 2, 36, 36)
+        fly, hov = self.fly.v, self.hover.v
+        on = self.isEnabled() or fly > 0
+        p.translate(20, 20)
         if self.hasFocus():
             p.setPen(QPen(QColor(C["text"]), 1.5))
             p.setBrush(Qt.NoBrush)
-            p.drawEllipse(QRectF(0.75, 0.75, 38.5, 38.5))
+            p.drawEllipse(QPointF(0, 0), 19.25, 19.25)
+        k = 1.0 - 0.07 * self.press.v                 # a press pushes it in a touch
+        p.scale(k, k)
         p.setPen(Qt.NoPen)
-        p.setBrush(body)
-        p.drawEllipse(r)
-        # paper plane, pointing right and a little up
-        ink = QColor("white") if on else QColor(C["faint"])
-        p.translate(20, 20)
-        p.rotate(-12)
-        plane = QPainterPath()
-        plane.moveTo(-9, -8)
-        plane.lineTo(10, 0)
-        plane.lineTo(-9, 8)
-        plane.lineTo(-6, 0)
-        plane.closeSubpath()
-        p.setBrush(ink)
-        p.drawPath(plane)
-        p.setPen(QPen(body, 1.6))
-        p.drawLine(QPointF(-6, 0), QPointF(3, 0))
+        if on:      # lit: a soft shadow under a gradient body (lighter on hover) with a sheen across the top
+            p.setBrush(QColor(0, 0, 0, 55 if theme_dark() else 30))
+            p.drawEllipse(QPointF(0, 1.4), 17.6, 17.6)
+            top, bottom = QColor(C["accent_hover"]), QColor(C["accent"])
+            body = QLinearGradient(0, -18, 0, 18)
+            body.setColorAt(0.0, top.lighter(100 + int(14 * hov)))
+            body.setColorAt(1.0, bottom.lighter(100 + int(14 * hov)))
+            p.setBrush(body)
+            p.drawEllipse(QPointF(0, 0), 18, 18)
+            sheen = QLinearGradient(0, -18, 0, 2)
+            sheen.setColorAt(0.0, QColor(255, 255, 255, 46))
+            sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setBrush(sheen)
+            p.drawEllipse(QPointF(0, 0), 17, 17)
+            gap = QColor(C["accent"])
+        else:
+            p.setBrush(QColor(C["surface_hi"]))
+            p.drawEllipse(QPointF(0, 0), 18, 18)
+            gap = QColor(C["surface_hi"])
+        if fly > 0:                                   # the tick fades in where the plane was
+            tick = QColor(255, 255, 255, int(255 * min(1.0, fly * 1.4)))
+            pen = QPen(tick, 2.4)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            mark = QPainterPath(QPointF(-6.5, 0.5))
+            mark.lineTo(-2, 5)
+            mark.lineTo(7, -5)
+            p.drawPath(mark)
+        if fly < 1:
+            # paper plane, pointing right and a little up; on park it flies off up and to the right
+            p.save()
+            p.setOpacity(1.0 - fly)
+            p.translate(24 * fly, -10 * fly)
+            p.scale(1 - 0.35 * fly, 1 - 0.35 * fly)
+            p.rotate(-12 - 10 * fly)
+            plane = QPainterPath()
+            plane.moveTo(-9, -8)
+            plane.lineTo(10, 0)
+            plane.lineTo(-9, 8)
+            plane.lineTo(-6, 0)
+            plane.closeSubpath()
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("white") if on else QColor(C["faint"]))
+            p.drawPath(plane)
+            p.setPen(QPen(gap, 1.6))
+            p.drawLine(QPointF(-6, 0), QPointF(3, 0))
+            p.restore()
 
 
 def send_button(parent, on_click, edits):
@@ -10310,23 +10438,117 @@ class RoundedWindow(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = self.card_rect()
-        for i in range(self.SHADOW, 0, -1):          # soft shadow, darker near the card
-            a = int(46 * (1 - i / (self.SHADOW + 1)) ** 2)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(0, 0, 0, a))
-            p.drawRoundedRect(r.adjusted(-i, -i + 3, i, i + 3), self.RADIUS + i, self.RADIUS + i)
-        g = QRadialGradient(r.left() + r.width() * 0.2, r.top(), max(r.width(), r.height()) * 1.1)
-        g.setColorAt(0.0, QColor(C["glow"]))
-        g.setColorAt(1.0, QColor(C["bg"]))
-        p.setBrush(g)
-        border = QColor(C["accent"]) if self._accent_border else veil(26 if theme_dark() else 40)
-        if self._accent_border:
-            border.setAlpha(170)
-        p.setPen(QPen(border, 1))
-        p.drawRoundedRect(r, self.RADIUS, self.RADIUS)
-        p.setPen(QPen(QColor(255, 255, 255, 14 if theme_dark() else 200), 1))   # faint highlight along the top
-        p.drawLine(QPointF(r.left() + self.RADIUS, r.top() + 1.5), QPointF(r.right() - self.RADIUS, r.top() + 1.5))
+        paint_material(p, self.card_rect(), self.RADIUS, self.SHADOW,
+                       QColor(C["accent"]) if self._accent_border else None)
+
+
+def paint_material(p, r, radius, shadow, border=None):
+    """The shared window look: a soft shadow that falls a little below (ambient plus a tight contact shadow), a
+    glow from the top left, a sheen that fades down the first third, a hairline edge and a lit top rim."""
+    dark = theme_dark()
+    paint_shadow(p, r, radius, shadow)
+    g = QRadialGradient(r.left() + r.width() * 0.2, r.top(), max(r.width(), r.height()) * 1.1)
+    g.setColorAt(0.0, QColor(C["glow"]))
+    g.setColorAt(1.0, QColor(C["bg"]))
+    p.setBrush(g)
+    p.drawRoundedRect(r, radius, radius)
+    sheen = QLinearGradient(r.topLeft(), QPointF(r.left(), r.top() + min(140.0, r.height() * 0.35)))
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 9 if dark else 120))
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+    p.setBrush(sheen)
+    p.drawRoundedRect(r, radius, radius)
+    edge = QColor(border) if border is not None else veil(26 if dark else 40)
+    if border is not None:
+        edge.setAlpha(170)
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(edge, 1))
+    p.drawRoundedRect(r, radius, radius)
+    rim = QLinearGradient(r.left() + radius, 0, r.right() - radius, 0)     # brightest mid-way, gone at the corners
+    for at, a in ((0.0, 0), (0.5, 26 if dark else 230), (1.0, 0)):
+        rim.setColorAt(at, QColor(255, 255, 255, a))
+    p.setPen(QPen(QBrush(rim), 1))
+    p.drawLine(QPointF(r.left() + radius, r.top() + 1.5), QPointF(r.right() - radius, r.top() + 1.5))
+
+
+def paint_shadow(p, r, radius, shadow, drop=4):
+    """A soft shadow that falls a little below r: wide ambient layers plus a tight contact shadow."""
+    dark = theme_dark()
+    p.setPen(Qt.NoPen)
+    for i in range(shadow, 0, -1):                       # ambient: wide, soft, offset down
+        a = int((52 if dark else 30) * (1 - i / (shadow + 1)) ** 2.2)
+        p.setBrush(QColor(0, 0, 0, a))
+        p.drawRoundedRect(r.adjusted(-i, -i + drop, i, i + drop), radius + i, radius + i)
+    for i, a in ((2, 34 if dark else 16), (1, 46 if dark else 22)):   # contact: right under the edge
+        p.setBrush(QColor(0, 0, 0, a))
+        p.drawRoundedRect(r.adjusted(-i * 0.5, 1, i * 0.5, i + 0.5), radius, radius)
+
+
+def paint_event_block(p, rect, color, past, radius, lift=0.0):
+    """A calendar event as a small raised tile in its own colour: a soft drop, a gentle top to bottom gradient and
+    a sheen across the top. Past events stay flat and faded. lift (0..1) brightens it while hovered."""
+    p.save()
+    p.setPen(Qt.NoPen)
+    color = QColor(color)
+    if not past:
+        p.setBrush(QColor(0, 0, 0, 46 if theme_dark() else 24))
+        p.drawRoundedRect(rect.translated(0, 1.2), radius, radius)
+    top, bottom = color.lighter(110 + int(8 * lift)), color.lighter(100 + int(8 * lift))
+    for c in (top, bottom):
+        c.setAlpha(95 if past else 238)
+    g = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+    g.setColorAt(0.0, top)
+    g.setColorAt(1.0, bottom)
+    p.setBrush(g)
+    p.drawRoundedRect(rect, radius, radius)
+    if not past:
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, radius, radius)
+        p.setClipPath(clip, Qt.IntersectClip)
+        sheen = QLinearGradient(rect.topLeft(), QPointF(rect.left(), rect.top() + min(14.0, rect.height() * 0.6)))
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 40 + int(22 * lift)))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setBrush(sheen)
+        p.drawRect(rect)
+    p.restore()
+
+
+def _blend(a, b, t):
+    """The colour t of the way from a to b."""
+    a, b = QColor(a), QColor(b)
+    return QColor(*(round(x + (y - x) * t) for x, y in ((a.red(), b.red()), (a.green(), b.green()),
+                                                         (a.blue(), b.blue()))))
+
+
+def lit_top(bg):
+    """A touch lighter than bg, for the top of a gradient that ends at bg: cards look lit from above."""
+    return _blend(bg, "#ffffff", 0.06 if QColor(bg).lightness() < 128 else 0.55).name()
+
+
+class Ease:
+    """A 0..1 value on a widget that glides to a target (calm and quick: 160 ms, eased out) and repaints the widget
+    on every step. Jumps straight there when Windows "Show animations" is off or the widget isn't on screen."""
+
+    def __init__(self, widget, ms=160):
+        self.w, self.v = widget, 0.0
+        self.anim = QVariantAnimation(widget)
+        self.anim.setDuration(ms)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.valueChanged.connect(self._step)
+
+    def _step(self, v):
+        self.v = float(v)
+        self.w.update()
+
+    def to(self, target):
+        self.anim.stop()
+        if self.v == target:
+            return
+        if reduced_motion() or not self.w.isVisible():
+            self._step(target)
+            return
+        self.anim.setStartValue(self.v)
+        self.anim.setEndValue(float(target))
+        self.anim.start()
 
 
 class GrabHandle(QWidget):
@@ -12173,6 +12395,7 @@ class Panel(RoundedWindow):
             self.store.log_captured(t)
             self.store.save()
             self._reset_quick()
+            self.send_btn.launch()
             def show_saved():
                 if not self.fast_add(t):
                     self.refresh()
@@ -12829,6 +13052,11 @@ class QuickBox(RoundedWindow):
         self.idle.timeout.connect(lambda: self.hide() if not self.edit.text().strip() and
                                   not self.pending_reminder else None)
         self.edit.textChanged.connect(lambda *_: self.idle.start())
+        self.fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self.fade.setDuration(140)
+        self.fade.setEasingCurve(QEasingCurve.OutCubic)
+        self.fade.setStartValue(0.0)
+        self.fade.setEndValue(1.0)
 
     def _escape(self):
         """Esc with something typed or tagged: wipe it for a fresh start. Esc on an empty box: close."""
@@ -12901,6 +13129,14 @@ class QuickBox(RoundedWindow):
         self.move(x, y)
         self._warned = False
         self.hint.setStyleSheet("")
+        self.fade.stop()
+        full = max(0.3, min(1.0, float(self.panel.store.settings.get("opacity_quick", 1.0))))  # See-through
+        if reduced_motion():
+            self.setWindowOpacity(full)
+        else:
+            self.fade.setEndValue(full)
+            self.setWindowOpacity(0.0)
+            self.fade.start()
         self._grab_focus()
         self.idle.start()
         QTimer.singleShot(250, self._check_focus)
@@ -12966,7 +13202,8 @@ class QuickBox(RoundedWindow):
         super().hideEvent(e)
 
     def _done(self, reminder=None):
-        self._say(reminder_confirmation(reminder) if reminder else "Parked \u2713")
+        self._say(reminder_confirmation(reminder) if reminder else "Parked \u2713", f"color: {C['glimmer']};")
+        self.send_btn.launch()
         self.panel.refresh_later()
         delay = 1500 if reminder else 500
         QTimer.singleShot(delay, self.hide)
@@ -13108,6 +13345,13 @@ class ToggleSwitch(QAbstractButton):
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.valueChanged.connect(self._set_k)
         self.toggled.connect(self._slide)
+        self.hover = Ease(self, ms=140)
+
+    def enterEvent(self, e):
+        self.hover.to(1.0)
+
+    def leaveEvent(self, e):
+        self.hover.to(0.0)
 
     def _set_k(self, v):
         self._k = float(v)
@@ -13127,13 +13371,28 @@ class ToggleSwitch(QAbstractButton):
         k = self._k
         track = QColor(int(off.red() + (on.red() - off.red()) * k), int(off.green() + (on.green() - off.green()) * k),
                        int(off.blue() + (on.blue() - off.blue()) * k))
+        top = _blend(track.darker(118), track.lighter(116), k)      # off: a slot pressed in; on: lit from above
         if not self.isEnabled():
             track.setAlpha(90)
+            top.setAlpha(90)
+        g = QLinearGradient(0, 2, 0, 20)
+        g.setColorAt(0.0, top)
+        g.setColorAt(0.6, track)
         p.setPen(Qt.NoPen)
-        p.setBrush(track)
+        p.setBrush(g)
         p.drawRoundedRect(QRectF(1, 2, 38, 18), 9, 9)
-        p.setBrush(QColor("#f4f4f4") if self.isEnabled() else QColor("#8a8a8a"))
-        p.drawEllipse(QRectF(4 + 18 * k, 5, 12, 12))
+        d = 12 + 1.2 * self.hover.v
+        knob = QRectF(10 + 18 * k - d / 2, 11 - d / 2, d, d)
+        if self.isEnabled():
+            p.setBrush(QColor(0, 0, 0, 70))
+            p.drawEllipse(knob.translated(0, 1))
+            kg = QLinearGradient(0, knob.top(), 0, knob.bottom())
+            kg.setColorAt(0.0, QColor("#ffffff"))
+            kg.setColorAt(1.0, QColor("#e4e5e8"))
+            p.setBrush(kg)
+        else:
+            p.setBrush(QColor("#8a8a8a"))
+        p.drawEllipse(knob)
         if self.hasFocus():
             p.setPen(QPen(QColor(C["text"]), 1))
             p.setBrush(Qt.NoBrush)
@@ -13197,6 +13456,22 @@ class Swatch(QAbstractButton):
             p.drawPie(QRectF(5, 5, 20, 20), -90 * 16, 180 * 16)
 
 
+def paint_tile(p, r, picked, hover, radius):
+    """A pick card: a contact shadow, a fill lit from above (warmer when picked, lighter on hover) and an edge
+    that turns accent when picked."""
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(0, 0, 0, 50 if theme_dark() else 18))
+    p.drawRoundedRect(r.translated(0, 1.2), radius, radius)
+    base = QColor(C["accent_soft"]) if picked else _blend(C["field"], C["surface_hi"], hover)
+    g = QLinearGradient(r.topLeft(), r.bottomLeft())
+    g.setColorAt(0.0, QColor(lit_top(base.name())))
+    g.setColorAt(0.45, base)
+    p.setBrush(g)
+    p.setPen(QPen(QColor(C["accent"]) if picked else _blend(C["border"], C["faint"], 0.5 * hover),
+                  1.6 if picked else 1))
+    p.drawRoundedRect(r, radius, radius)
+
+
 class PreviewTile(QAbstractButton):
     """A picture with a caption under it; a border shows the chosen one."""
 
@@ -13206,15 +13481,20 @@ class PreviewTile(QAbstractButton):
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(*size)
+        self.hover = Ease(self, ms=140)
+
+    def enterEvent(self, e):
+        self.hover.to(1.0)
+
+    def leaveEvent(self, e):
+        self.hover.to(0.0)
 
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(QColor(C["accent"] if self.isChecked() else C["border"]), 2 if self.isChecked() else 1))
-        p.setBrush(QColor(C["surface_hi"] if self.underMouse() else C["field"]))
-        p.drawRoundedRect(r, 10, 10)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -2)
+        paint_tile(p, r, self.isChecked(), self.hover.v, 10)
         if self.pix is not None and not self.pix.isNull():
             s = min(self.width() - 20, self.height() - 34)
             pm = self.pix.scaled(s, s, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -13237,6 +13517,13 @@ class ChoiceCard(QAbstractButton):
         self.setToolTip(desc)
         self.setMinimumHeight(52)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.hover = Ease(self, ms=140)
+
+    def enterEvent(self, e):
+        self.hover.to(1.0)
+
+    def leaveEvent(self, e):
+        self.hover.to(0.0)
 
     def sizeHint(self):
         return QSize(150, 52)
@@ -13244,16 +13531,28 @@ class ChoiceCard(QAbstractButton):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(QColor(C["accent"] if self.isChecked() else C["border"]), 2 if self.isChecked() else 1))
-        p.setBrush(QColor(C["accent_soft"] if self.isChecked() else (C["surface_hi"] if self.underMouse() else C["field"])))
-        p.drawRoundedRect(r, 9, 9)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -2)
+        paint_tile(p, r, self.isChecked(), self.hover.v, 9)
+        if self.isChecked():            # a small accent tick in the corner
+            c = QPointF(r.right() - 12, r.top() + 12)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C["accent"]))
+            p.drawEllipse(c, 6.5, 6.5)
+            pen = QPen(QColor("white"), 1.6)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            tick = QPainterPath(c + QPointF(-3, 0.2))
+            tick.lineTo(c + QPointF(-0.8, 2.4))
+            tick.lineTo(c + QPointF(3, -2.2))
+            p.drawPath(tick)
         f = QFont(self.font())
         f.setPixelSize(12)
         f.setBold(True)
         p.setFont(f)
         p.setPen(QColor(C["text"]))
-        p.drawText(QRectF(12, 7, r.width() - 16, 18), Qt.AlignLeft | Qt.AlignVCenter, self.title)
+        p.drawText(QRectF(12, 7, r.width() - 34, 18), Qt.AlignLeft | Qt.AlignVCenter, self.title)
         f.setBold(False)
         f.setPixelSize(10)
         p.setFont(f)
@@ -14837,25 +15136,33 @@ class Coach(QObject):
 
 
 def make_settings_style():
+    dark = theme_dark()
+    rim = lit_top(C['border']) if dark else C['border']                      # top edge catches the light
+    floor = _blend(C['border'], "#000000", 0.28 if dark else 0.07).name()    # bottom edge sits in shadow
+    picked = _blend(C['accent_soft'], C['accent'], 0.3 if dark else 0.12).name()
     return f"""
 QWidget#settingsRoot {{ background: {C['bg']}; }}
 QListWidget#side {{ background: {C['surface']}; border: none; border-right: 1px solid {C['border']};
     color: {C['dim']}; font-size: 13px; outline: none; padding: 10px 6px; }}
-QListWidget#side::item {{ padding: 9px 10px; border-radius: 8px; margin: 1px 0; }}
+QListWidget#side::item {{ padding: 9px 10px 9px 8px; border-radius: 8px; margin: 1px 0;
+    border-left: 2px solid transparent; }}
 QListWidget#blockList {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 8px; outline: none; padding: 4px; font-size: 13px; }}
 QListWidget#blockList::item {{ padding: 5px 6px; border-radius: 6px; }}
 QListWidget#blockList::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
 QListWidget#blockList::indicator {{ width: 13px; height: 13px; border: 1px solid {C['dim']}; border-radius: 4px; }}
 QListWidget#blockList::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
-QListWidget#side::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
+QListWidget#side::item:selected {{ color: {C['text']}; border-left: 2px solid {C['accent']};
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {picked}, stop:1 {C['accent_soft']}); }}
 QListWidget#side::item:hover:!selected {{ background: {C['surface_hi']}; color: {C['text']}; }}
 QScrollArea#page {{ background: {C['bg']}; border: none; }}
 QWidget#pageBody {{ background: {C['bg']}; }}
 QLabel#pageTitle {{ color: {C['text']}; font-size: 18px; font-weight: 700; }}
 QLabel#pageSub {{ color: {C['faint']}; font-size: 12px; }}
 QLabel#section {{ color: {C['dim']}; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-top: 10px; }}
-QFrame#group {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 10px; }}
+QFrame#group {{ border: 1px solid {C['border']}; border-top-color: {rim}; border-bottom-color: {floor};
+    border-radius: 12px; background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {lit_top(C['surface'])},
+    stop:0.2 {C['surface']}, stop:1 {C['surface']}); }}
 QLabel#rowTitle {{ color: {C['text']}; font-size: 13px; }}
 QLabel#rowDesc {{ color: {C['faint']}; font-size: 12px; }}
 QLabel#logLine {{ color: {C['dim']}; font-size: 12px; }}
@@ -14869,20 +15176,27 @@ QPushButton#logHead:hover, QPushButton#logHead:focus {{ color: {C['accent_text']
 QLabel#value {{ color: {C['dim']}; font-size: 12px; min-width: 38px; }}
 QKeySequenceEdit, QLineEdit {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 6px; padding: 3px 6px; }}
-QPushButton#seg {{ background: {C['field']}; color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 0;
-    padding: 4px 11px; font-size: 12px; }}
-QPushButton#seg[pos="first"] {{ border-top-left-radius: 7px; border-bottom-left-radius: 7px; }}
-QPushButton#seg[pos="last"] {{ border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
-QPushButton#seg:checked {{ background: {C['accent']}; color: white; border-color: {C['accent']}; }}
+QPushButton#seg {{ color: {C['dim']}; border: 1px solid {C['border']}; border-bottom-color: {floor}; border-radius: 0;
+    padding: 5px 13px; font-size: 12px; background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+    stop:0 {lit_top(C['field'])}, stop:1 {C['field']}); }}
+QPushButton#seg[pos="first"] {{ border-top-left-radius: 8px; border-bottom-left-radius: 8px; }}
+QPushButton#seg[pos="last"] {{ border-top-right-radius: 8px; border-bottom-right-radius: 8px; }}
+QPushButton#seg:checked {{ color: white; border-color: {C['accent']};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']}); }}
 QPushButton#seg:hover:!checked {{ background: {C['surface_hi']}; color: {C['text']}; }}
-QPushButton#act {{ background: {C['surface_hi']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 7px;
-    padding: 5px 12px; font-size: 12px; }}
+QPushButton#act {{ color: {C['text']}; border: 1px solid {C['border']}; border-top-color: {rim};
+    border-bottom-color: {floor}; border-radius: 8px; padding: 5px 12px; font-size: 12px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {lit_top(C['surface_hi'])}, stop:1 {C['surface_hi']}); }}
 QPushButton#act:hover {{ border-color: {C['accent']}; }}
+QPushButton#act:pressed {{ background: {C['surface_hi']}; }}
 QPushButton#act:disabled {{ color: {C['border']}; border-color: {C['surface_hi']}; }}
 QSlider::groove:horizontal {{ height: 4px; background: {C['border']}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: {C['accent']}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: #f4f4f4; border: 1px solid {C['border']}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
-QSlider::handle:horizontal:hover {{ background: white; }}
+QSlider::sub-page:horizontal {{ border-radius: 2px;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {C['accent']}, stop:1 {C['accent_hover']}); }}
+QSlider::handle:horizontal {{ border: 1px solid {floor}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #e2e3e6); }}
+QSlider::handle:horizontal:hover, QSlider::handle:horizontal:focus {{ border-color: {C['accent']}; }}
+QSlider::handle:horizontal:pressed {{ background: #f1f1f3; }}
 """
 
 
@@ -16459,7 +16773,10 @@ class MeetingNotice(QWidget):
             tail.lineTo(r.left() + 1, cy + 7)
         edge = QColor(self.accent)
         edge.setAlpha(110)
-        p.setBrush(QColor(C["surface_hi"]))
+        lit = QLinearGradient(r.topLeft(), r.bottomLeft())
+        lit.setColorAt(0.0, QColor(lit_top(C["surface_hi"])))
+        lit.setColorAt(1.0, QColor(C["surface_hi"]))
+        p.setBrush(lit)
         p.setPen(QPen(edge, 1))
         p.drawPath(path.united(tail))
 
@@ -17193,6 +17510,7 @@ class AgendaGrid(QWidget):
         self.blocks = []                    # (QRectF, event), in day then time order
         self.selected = -1
         self.hovered = -1
+        self.hover_e = Ease(self, ms=140)   # the hovered event brightens in
         self.drag = None                    # a new event being clicked or dragged out, or an event edge being moved
         self.scroller = QTimer(self)        # scrolls while a drag sits near the top or bottom of the view
         self.scroller.setInterval(30)
@@ -17285,15 +17603,15 @@ class AgendaGrid(QWidget):
                 continue            # drawn below at its new length
             past = e["end"] <= self.now
             color = QColor(event_color(e))
-            fill = QColor(color)
-            fill.setAlpha(95 if past else 235)
-            p.setPen(Qt.NoPen)
-            p.setBrush(fill)
-            p.drawRoundedRect(rect, 5, 5)
-            if n in (self.selected, self.hovered):
+            lift = self.hover_e.v if n == self.hovered else 0.0
+            paint_event_block(p, rect, color, past, 6, lift)
+            if n == self.selected or lift:
+                ring = QColor(C["text"])
+                if n != self.selected:
+                    ring.setAlpha(int(150 * lift))
                 p.setBrush(Qt.NoBrush)
-                p.setPen(QPen(QColor(C["text"]), 1.6))
-                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+                p.setPen(QPen(ring, 1.6 if n == self.selected else 1.2))
+                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
             ink = QColor(C["text"]) if past else ink_for(color)
             if past:
                 ink.setAlpha(170)
@@ -17317,7 +17635,9 @@ class AgendaGrid(QWidget):
             p.restore()
             if pill:
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(255, 255, 255, 235))
+                p.setBrush(QColor(0, 0, 0, 40))
+                p.drawRoundedRect(pill.translated(0, 0.8), 7, 7)
+                p.setBrush(QColor(255, 255, 255, 240))
                 p.drawRoundedRect(pill, 7, 7)
                 tag = QFont(small)
                 tag.setPixelSize(10)
@@ -17330,9 +17650,15 @@ class AgendaGrid(QWidget):
             col = self.col_rect(self.days.index(today))
             y = self.hour_y(self.now.hour + self.now.minute / 60)
             red = QColor("#ea4335")
+            glow = QColor(red)
+            glow.setAlpha(50)
+            p.setPen(QPen(glow, 5, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(col.x(), y), QPointF(col.right() - 2, y))
             p.setPen(QPen(red, 2))
             p.drawLine(QPointF(col.x(), y), QPointF(col.right() - 2, y))
             p.setPen(Qt.NoPen)
+            p.setBrush(glow)
+            p.drawEllipse(QPointF(col.x(), y), 8, 8)
             p.setBrush(red)
             p.drawEllipse(QPointF(col.x(), y), 5, 5)
         if dragging:
@@ -17488,6 +17814,9 @@ class AgendaGrid(QWidget):
                        Qt.PointingHandCursor if n >= 0 else Qt.ArrowCursor)
         if n != self.hovered:
             self.hovered = n
+            self.hover_e.anim.stop()
+            self.hover_e.v = 0.0
+            self.hover_e.to(1.0)
             self.update()
         self.peek.aim(*((self.blocks[n][1], self.blocks[n][0]) if n >= 0 and not joining else ()))
         tip = f"Join call: {joining['title']}" if joining else ""
@@ -17749,8 +18078,18 @@ class AgendaDays(QWidget):
             circle = QRectF(col.center().x() - 15, 18, 30, 30)
             if is_today:
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(C["accent"]))
+                p.setBrush(QColor(0, 0, 0, 50 if theme_dark() else 26))
+                p.drawEllipse(circle.translated(0, 1.2))
+                lit = QLinearGradient(circle.topLeft(), circle.bottomLeft())
+                lit.setColorAt(0.0, QColor(C["accent_hover"]))
+                lit.setColorAt(1.0, QColor(C["accent"]))
+                p.setBrush(lit)
                 p.drawEllipse(circle)
+                sheen = QLinearGradient(circle.topLeft(), QPointF(circle.left(), circle.center().y()))
+                sheen.setColorAt(0.0, QColor(255, 255, 255, 46))
+                sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+                p.setBrush(sheen)
+                p.drawEllipse(circle.adjusted(1, 1, -1, -1))
             number = QFont(self.font())
             number.setPixelSize(17)
             number.setWeight(QFont.DemiBold if is_today else QFont.Normal)
@@ -17768,18 +18107,14 @@ class AgendaDays(QWidget):
             else:
                 color = QColor(event_color(e))
                 past = e["end"] <= self.grid.now
-                fill = QColor(color)
-                fill.setAlpha(95 if past else 235)
-                p.setPen(Qt.NoPen)
-                p.setBrush(fill)
-                p.drawRoundedRect(rect, 4, 4)
+                paint_event_block(p, rect, color, past, 5)
                 p.setPen(QColor(C["text"]) if past else ink_for(color))
                 p.drawText(rect.adjusted(6, 0, -4, 0).toRect(), Qt.AlignLeft | Qt.AlignVCenter,
                            p.fontMetrics().elidedText(e["title"], Qt.ElideRight, int(rect.width() - 10)))
             if n == self.selected and self.hasFocus():
                 p.setBrush(Qt.NoBrush)
                 p.setPen(QPen(QColor(C["text"]), 1.4))
-                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
+                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
         p.setPen(QPen(QColor(C["border"]), 1))
         p.drawLine(QPointF(0, self.height() - 0.5), QPointF(self.width(), self.height() - 0.5))
         p.end()
@@ -18008,7 +18343,7 @@ class CalendarAgenda(QWidget):
         crisp.setHintingPreference(QFont.PreferFullHinting)     # small text snaps to whole pixels: sharper
         self.setFont(crisp)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(7, 6, 7, 7)          # room for the shadow; place() keeps the card where it was
         self.card = QFrame(self)
         self.card.setObjectName("agendaCard")
         outer.addWidget(self.card)
@@ -18087,10 +18422,17 @@ class CalendarAgenda(QWidget):
             return
         self.hide()
 
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        paint_shadow(p, QRectF(self.card.geometry()), 14, 6, drop=1)
+
     def apply_background(self):
         bg = meeting_bar_background(self.calendar.store.settings)
+        rim = lit_top(C["border"]) if QColor(bg).lightness() < 128 else C["border"]
         self.card.setStyleSheet(
-            f"QFrame#agendaCard {{ background: {bg}; border: 1px solid {C['border']}; border-radius: 14px; }}"
+            f"QFrame#agendaCard {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {lit_top(bg)},"
+            f" stop:0.12 {bg}, stop:1 {bg}); border: 1px solid {C['border']}; border-top-color: {rim}; border-radius: 14px; }}"
             f"QLabel#agendaRange {{ color: {C['text']}; font-size: 14px; font-weight: 700; padding-left: 6px; }}"
             f"QLabel#agendaLoading {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid"
             f" {C['border']}; border-radius: 12px; padding: 5px 14px; font-size: 12px; }}"
@@ -18098,7 +18440,7 @@ class CalendarAgenda(QWidget):
             " padding: 3px 8px; font-size: 14px; min-width: 14px; min-height: 18px; }"
             f"QToolButton:hover, QToolButton:focus {{ background: {C['surface_hi']}; }}"
             f"QToolButton:disabled {{ color: {C['faint']}; }}"
-            f"QToolButton#agendaToday {{ border: 1px solid {C['border']}; font-size: 12px; font-weight: 600;"
+            f"QToolButton#agendaToday {{ border: 1px solid rgba(128, 128, 128, 90); font-size: 12px; font-weight: 600;"
             " padding: 3px 10px; }"
             "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px 0; }"
             f"QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 4px; min-height: 30px; }}"
@@ -18120,7 +18462,8 @@ class CalendarAgenda(QWidget):
         x = max(area.left() + 8, min(self.bar.x(), area.right() - width - 7))
         y = self.bar.y() - height - 8 if use_above else self.bar.geometry().bottom() + 8
         y = max(area.top() + 8, min(y, area.bottom() - height - 7))
-        self.setGeometry(x, y, width, height)
+        m = self.layout().contentsMargins()           # the card lands at x, y; the shadow sits around it
+        self.setGeometry(x - m.left(), y - m.top(), width + m.left() + m.right(), height + m.top() + m.bottom())
 
     def focus_hours(self):
         """Where the grid opens: the hour chosen in Settings, or an hour before now."""
@@ -20372,15 +20715,18 @@ class MeetingBadge(QWidget):
     def apply_background(self):
         bg = meeting_bar_background(self.calendar.store.settings)
         text, dim = self._inks()
-        self.setStyleSheet(f"QFrame#meetingInner {{ background: {bg}; border: 1px solid {C['border']}; "
-                           f"border-radius: 12px; }} QLabel#meetingTitle {{ color: {text}; "
+        rim = lit_top(C["border"]) if QColor(bg).lightness() < 128 else C["border"]
+        self.setStyleSheet(f"QFrame#meetingInner {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                           f"stop:0 {lit_top(bg)}, stop:1 {bg}); border: 1px solid {C['border']}; "
+                           f"border-top-color: {rim}; border-radius: 12px; }} QLabel#meetingTitle {{ color: {text}; "
                            f"font-size: 13px; font-weight: 700; }} QLabel#meetingTime {{ color: {dim}; "
-                           f"font-size: 13px; }} QToolButton#meetingJoin {{ background: {C['accent']}; color: white; "
-                           "border: 1px solid transparent; border-radius: 6px; font-size: 11px; font-weight: 700; padding: 0 3px; } "
-                           "QToolButton#meetingJoin:hover, QToolButton#meetingJoin:focus { background: #b54552; "
+                           f"font-size: 13px; }} QToolButton#meetingJoin {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                           f"stop:0 {C['accent_hover']}, stop:1 {C['accent']}); color: white; "
+                           "border: 1px solid transparent; border-radius: 7px; font-size: 11px; font-weight: 700; padding: 0 3px; } "
+                           f"QToolButton#meetingJoin:hover, QToolButton#meetingJoin:focus {{ background: {C['accent_hover']}; "
                            "border: 1px solid white; } "
-                           f"QToolButton#meetingMirror, QToolButton#meetingAdd {{ background: rgba(128, 128, 128, 40); "
-                           f"border: 1px solid {C['border']}; border-radius: 6px; padding: 0; }} "
+                           f"QToolButton#meetingMirror, QToolButton#meetingAdd {{ background: rgba(128, 128, 128, 30); "
+                           f"border: 1px solid {C['border']}; border-radius: 7px; padding: 0; }} "
                            f"QToolButton#meetingMirror:hover, QToolButton#meetingMirror:focus, "
                            f"QToolButton#meetingAdd:hover, QToolButton#meetingAdd:focus {{ "
                            f"background: {C['surface_hi']}; border: 1px solid {C['accent']}; }} "
@@ -21054,13 +21400,6 @@ class MeetingBadge(QWidget):
         self._notify_meetings(now)
 
 
-def _blend(a, b, t):
-    """The colour t of the way from a to b."""
-    a, b = QColor(a), QColor(b)
-    return QColor(*(round(x + (y - x) * t) for x, y in ((a.red(), b.red()), (a.green(), b.green()),
-                                                         (a.blue(), b.blue()))))
-
-
 class UsageHeat(QWidget):
     """Your days as a grid, one column a week (Monday on top), as many weeks as fit, today at the right. Shaded by
     focus minutes (quartiles of your own days); a day with only parked thoughts gets the lightest shade. Hover a
@@ -21603,6 +21942,7 @@ class SettingsWindow(QWidget):
         self.setWindowTitle(f"{APP_NAME}: settings")
         self.setWindowIcon(app_icon())
         self.setStyleSheet(STYLE + SETTINGS_STYLE)
+        THEME["hooks"].append(lambda: self.setStyleSheet(STYLE + SETTINGS_STYLE))
         self.resize(720, 560)
         self.setMinimumSize(600, 420)
         h = QHBoxLayout(self)
