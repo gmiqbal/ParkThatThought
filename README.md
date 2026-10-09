@@ -112,7 +112,7 @@ While you use the laptop, a tiny character peeks out from behind the cloud: a lo
 
 Add `20m`, `in 1 hour` or `at 3:30 pm` to any note, or press the bell. When it's due, a card grows out of the cloud with snooze buttons (**More** has 1 hour, 3 hours, tonight, tomorrow morning or any time), **Done**, and the note's name as a link that opens it. Reminders can repeat: every day, weekdays, every week, chosen days or every month. Several due at once share one card: a row per note, with **Done** and a **Snooze** menu, plus **Snooze all** and **Stop all**. It never takes what you are typing: it waits until you pause, or press the list hotkey to answer it from the keyboard (Enter snoozes, Esc snoozes too).
 
-<img src="docs/reminder.png" width="569" alt="Reminder card: Buy coffee beans, with snooze, Open note and Done">
+<img src="docs/reminder.png" width="569" alt="Reminder card: Buy coffee beans, with snooze times, a More menu and Done">
 
 ### Background noise and music
 
