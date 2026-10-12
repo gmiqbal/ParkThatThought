@@ -90,7 +90,7 @@ Press **Focus** in the list. The cloud shows the countdown on its outline and as
 
 <img src="docs/focus-round.png" width="451" alt="What's this round for? with one-click answers">
 
-At the end, a card shows what you did. With app tracking on, it lists the apps you used, and you mark the ones that distracted you this round. **Take out** removes those minutes and shows your net focus. Then pick a break or another round.
+At the end, a card shows what you did. With app tracking on, it lists the apps you used, and you mark the ones that distracted you this round. **Take out** removes those minutes and shows your net focus. Then pick a break or another round. Rounds 20 minutes or less apart count as one run: the card adds the new round on (a "+25" and "25 + 25 = 50 min in a row"), and Your stats keeps your longest run.
 
 <img src="docs/session-card.png" width="476" alt="Focus complete card with app buttons, Take out 2 min, Start break and Focus again">
 
@@ -100,11 +100,11 @@ After a long stretch at the computer without a focus round (every 45 minutes by 
 
 <img src="docs/check-in.png" width="462" alt="Check-in: Office hours starts in 1h 24m. Want a focus round before then?">
 
-It stays quiet during calls (mic or camera in use), full screen and presentations. Pause it for an hour, the rest of the day, or until you turn it back on.
+It stays quiet during calls (mic or camera in use), full screen and presentations. Pause it for an hour, the rest of the day, or until you turn it back on. Find the card distracting? Pick **Show as a dot** on it (or Settings > Check-ins > **Show as**): check-ins then wait as a small red dot on the cloud until you click it.
 
 ### Block distracting apps
 
-Pick the apps that pull you away (WhatsApp, Teams, Outlook, anything) from a searchable list in Settings > **App blocker** (web apps like ChatGPT or Gemini have their own tick under their browser). Block them for 25, 50 or 90 minutes or any length (the no-entry button at the top of the list, or Settings), or turn on **Block in every focus session**. Open one anyway and it closes again with a soft low tone and a word from the cloud, every time you try, with **Pause** (open that app for a few minutes), **Stop for this app** or **Stop for all**. Need just one app for a moment? Press and hold the cloud and unblock it for 3, 5 or 10 minutes. When the block ends, the cloud says your apps are unblocked and how many times you reached for them (after a focus session it's on the end card). Calls are safe: nothing closes while your mic or camera is in use.
+Pick the apps that pull you away (WhatsApp, Teams, Outlook, anything) from a searchable list in Settings > **App blocker** (web apps like ChatGPT or Gemini have their own tick under their browser). Block them for 25, 50 or 90 minutes or any length (the no-entry button at the top of the list, or Settings), or turn on **Block in every focus session**. Open one anyway and it closes again with a soft low tone and a word from the cloud, every time you try, with **Pause** (open that app for a few minutes), **Allow...** (this block, 2 h, 4 h or the rest of today; hours and the rest of today carry over to your next blocks, and **Block again** in Settings undoes it) or **Stop for all**. Need just one app for a moment? Press and hold the cloud and unblock it for 3, 5 or 10 minutes. When the block ends, the cloud says your apps are unblocked and how many times you reached for them (after a focus session it's on the end card). Calls are safe: nothing closes while your mic or camera is in use.
 
 ### Water and eye breaks
 
@@ -136,7 +136,7 @@ Every thought you park is logged on your PC: when it came, what the timer was do
 
 ### Make it yours
 
-System, Light or Dark theme (System follows Windows). The cloud starts white with the time left on its outline; pick its color, shape (thought cloud, circle, squircle and more) and size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy. **Your stats** is a report of how you use it: a heatmap of your days, when you focus best, what became of your thoughts, your records and streaks, counted on your PC only.
+System, Light or Dark theme (System follows Windows). The cloud is drawn in ink and follows the theme, with the time left on its outline; pick the ensō or a coloured shape (glossy thought cloud, circle, squircle and more) and its size. Settings also covers hotkeys, gestures, flags, opacity, check-ins, sounds and privacy. **Your stats** is a report of how you use it: a heatmap of your days, when you focus best, what became of your thoughts, your records and streaks, counted on your PC only.
 
 <img src="docs/settings-appearance.png" width="800" alt="Settings, Appearance page">
 
@@ -162,7 +162,7 @@ Everything works from the keyboard.
 - **Your notes stay on your PC**, in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`. No account, no server, no tracking.
 - **Hidden from screen share and screenshots** by default (Zoom, Teams, Meet, OBS, Snipping Tool). You can turn this off.
 - **App tracking during focus rounds** (on by default, turn it off in Settings > Focus & breaks) notes which app is in front so the end-of-round card can ask which ones distracted you. It never leaves your PC.
-- **The internet is used only for:** downloading, updates (**Restart / update**, and the automatic check unless you turn it off), and, if you turn them on, Google Calendar and phone alerts through ntfy.sh (timer messages only, never your notes).
+- **The internet is used only for:** downloading, updates (**Restart / update**, and the automatic check unless you turn it off), and, if you turn them on, Google Calendar, phone alerts through ntfy.sh (timer messages only, never your notes) and, if you set up the phone app, sync of your open notes with your own Google account (Settings > Focus & breaks > Phone app link).
 - **Copy for AI** only copies text to your clipboard. You decide where to paste it.
 
 ## Updating

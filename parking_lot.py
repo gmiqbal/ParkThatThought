@@ -53,7 +53,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QEvent, QLockFile, QProcess, QRect, QVariantAnimation, QMimeData, QObject, QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QIntValidator, QKeySequence,
-                           QPainter, QPen, QPixmap, QShortcut)
+                           QPainter, QPen, QPixmap, QPolygonF, QShortcut)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
                                QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
                                QDoubleSpinBox, QMenu, QMessageBox, QPushButton, QScrollArea, QTabBar,
@@ -84,8 +84,14 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.7", "11 Oct 2026", "One page", ("A new look: your notes on a ruled page, flags as margin words, Settings and cards as paper.",
+                           "The circle is a thought cloud drawn in ink. The ens\u014d and the older shapes are in Settings.",
+                           "Urgent notes stand out in red. Reminders get their own bell tag.",
+                           "Check-ins can wait as a small dot on the circle instead of a card.",
+                           "Blocked app: Allow it for this block, 2 h, 4 h or the rest of today.",
+                           "Back-to-back focus rounds add up on the done card and in Your stats.")),
     ("1.6.1", "9 Oct 2026", "A richer, smoother look", ("Notes, the circle, the quick note, the calendar, the meeting bar and Settings get a softer, lit look.",
                            "Hovers and presses ease in and out. Turning off animations in Windows turns that off too.",
                            "Park a note and the plane flies off, with a tick in its place.")),
@@ -202,9 +208,20 @@ def meeting_bar_taskbar_strip(screen):
 
 
 def meeting_bar_background(settings):
-    """A chosen solid color, or the theme's default surface."""
+    """A chosen solid color, or the theme's page."""
     color = QColor(str(settings.get("meeting_bar_bg") or ""))
-    return color.name() if color.isValid() else C["surface_hi"]
+    return color.name() if color.isValid() else C["bg"]
+
+
+def meeting_countdown(e, now, window=3600):
+    """How full the bar's enso is: it fills over the last hour before an event, then empties while it runs.
+    None for an all-day event (nothing to count)."""
+    if e.get("all_day"):
+        return None
+    if now < e["start"]:
+        return max(0.0, 1 - (e["start"] - now).total_seconds() / window)
+    span = (e["end"] - e["start"]).total_seconds()
+    return max(0.0, min(1.0, (e["end"] - now).total_seconds() / span)) if span > 0 else 0.0
 
 
 def calendar_alert_minutes(settings):
@@ -1027,30 +1044,31 @@ class HotkeyManager(QObject):
 
 IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 
-C = dict(bg="#1b1c1f", surface="#24262a", surface_hi="#2b2d32", field="#202226", border="#34363c",
-         text="#ececec", dim="#a0a2a8", faint="#8a8d94", accent="#a13a47", accent_soft="#3a2226",
-         accent_text="#e57a86",   # the accent as text or a thin icon: 4.5:1 or better on every surface
-         urge="#6b93f0", urge_bg="#1d2638", done="#202125", card="#24262a",
-         dist="#b48cff", dist_bg="#261f38", urgent="#ef5a5f", urgent_bg="#2e2327",
-         glimmer="#4cc38a", glimmer_bg="#1b2b23", anti="#e5646e", anti_bg="#2e1f22",
-         idea="#e8b64c", idea_bg="#2d2717",
-         toast="#33363d", toast_border="#4a4d55", undo="#f3b4bc", cream="#f3e3c3", warn="#f0c16c",
-         ok_soft="#80c2a1", timer="#f0d58a", brk="#4fb6a8", brk_bg="#1c3431", disabled="#45474d",
-         rem_fg="#ffe0a4", rem_bg="#403627", rem_border="#8d6c3d", rem_hover="#55452e", glow="#262830",
-         hint_bg="#2f3238", hint_border="#5a5e67", accent_hover="#b8465a")
+C = dict(bg="#17191c", surface="#1a1c1f", surface_hi="#22252a", field="#1c1e22", border="#2a2d32",
+         text="#e8e4db", dim="#9b978d", faint="#8a867c", accent="#bf4530", accent_soft="#3a2420",
+         accent_text="#ef8a74",   # the accent as text or a thin icon: 4.5:1 or better on every surface
+         urge="#7ea6e6", urge_bg="#23314a", done="#1e2024", card="#1a1c1f",
+         dist="#a48be0", dist_bg="#2d2742", urgent="#ee735b", urgent_bg="#3a2421",
+         glimmer="#6cbf8a", glimmer_bg="#1f3328", anti="#d07a86", anti_bg="#352227",
+         idea="#e2c15a", idea_bg="#36301a",
+         toast="#262a30", toast_border="#3a3e45", undo="#f2b8ab", cream="#f1e6cf", warn="#e8bd62",
+         ok_soft="#86c79f", timer="#e66a4f", brk="#5fb8a8", brk_bg="#1d3330", disabled="#44474d",
+         rem_fg="#d487cd", rem_bg="#362434", rem_border="#613e5e", rem_hover="#402b3e", glow="#20232a",
+         hint_bg="#24272c", hint_border="#4c5058", accent_hover="#c94d35")
 DARK = dict(C)
-# Light twin of every key. A dark value shared by two keys keeps one light value, and no light value repeats a
-# dark one, so a stylesheet built in either theme can be recoloured by swapping hex codes (see apply_theme).
-LIGHT = dict(DARK, bg="#f3f4f6", surface="#ffffff", surface_hi="#eaecef", field="#fafbfc", border="#d3d6dc",
-             text="#1d1f23", dim="#50545c", faint="#5f636b", accent_soft="#f5e3e6", accent_text="#98303e",
-             urge="#3a64c4", urge_bg="#e5ecfa", done="#eceef1", card="#ffffff",
-             dist="#7448cc", dist_bg="#eee7fb", urgent="#c9272f", urgent_bg="#fbe6e7",
-             glimmer="#177346", glimmer_bg="#e1f3e8", anti="#ad323d", anti_bg="#f8e5e7",
-             idea="#8f6208", idea_bg="#faf0d6",
-             toast="#fdfdfe", toast_border="#c9ccd3", undo="#8e2c39", cream="#7a4f12", warn="#9a6400",
-             ok_soft="#2d8a5c", timer="#8a6a10", brk="#186e63", brk_bg="#dff1ee", disabled="#b9bcc3",
-             rem_fg="#7a5410", rem_bg="#fbefd8", rem_border="#d9b77a", rem_hover="#f5e2bd", glow="#fefefe",
-             hint_bg="#fcfcfd", hint_border="#b8bcc4", accent_hover="#86283a")
+# Light twin of every key. Two keys share a value in one theme exactly when they share it in the other, and no
+# light value repeats a dark one, so a stylesheet built in either theme can be recoloured by swapping hex codes
+# (see apply_theme).
+LIGHT = dict(DARK, bg="#efebe2", surface="#f7f4ec", surface_hi="#eee9de", field="#fbf9f4", border="#e2dccf",
+             text="#24262a", dim="#625e56", faint="#6c675e", accent="#b8392a", accent_soft="#f3dfd9",
+             accent_text="#9e2f22", urge="#3461b0", urge_bg="#dde6f6", done="#ece7dc", card="#f7f4ec",
+             dist="#6a4bb8", dist_bg="#ebe4f8", urgent="#b0321f", urgent_bg="#f8e0db",
+             glimmer="#27734a", glimmer_bg="#dff0e5", anti="#a3404d", anti_bg="#f6e2e5",
+             idea="#8a5f00", idea_bg="#f8eed0",
+             toast="#fffdf8", toast_border="#d9d3c6", undo="#8e2c1f", cream="#6f4a12", warn="#8f5f00",
+             ok_soft="#2f7d52", timer="#b5402c", brk="#1d6f63", brk_bg="#ddefeb", disabled="#c4bfb4",
+             rem_fg="#873981", rem_bg="#f2e1f1", rem_border="#d9b2d5", rem_hover="#ebd1e8", glow="#fffefb",
+             hint_bg="#fffcf5", hint_border="#cfc8ba", accent_hover="#a03020")
 THEME = {"mode": "system", "hooks": []}    # hooks: things that bake a colour outside a stylesheet re-run on a switch
 
 
@@ -1176,7 +1194,7 @@ def custom_flag_css():
                                                             (q.blue(), base.blue())))).name()
         out.append(f'QLabel#chip[kind="{k}"] {{ color: {col}; background: {bg}; border: 1px solid {col}; }}'
                    f'QToolButton#flag[kind="{k}"]:checked {{ color: {col}; background: {bg}; border-color: {col}; }}'
-                   f'QFrame#card[tint="{k}"] {{ background: {bg}; }}')
+                   + page_flag_css(k, col))
     return "\n".join(out)
 
 
@@ -1184,7 +1202,7 @@ def full_style():
     return STYLE + custom_flag_css()
 
 
-INBOX_SOURCES = {"private_note", "private_note_paste", "private_note_drop", "circle_drop"}  # land in the first tab
+INBOX_SOURCES = {"private_note", "private_note_paste", "private_note_drop", "circle_drop", "phone"}  # land in the first tab
 FLAG_HINT_DELAY_MS = 350   # quick enough to feel instant when you want it, slow enough not to flicker past
 
 
@@ -1441,10 +1459,27 @@ def flag_on(settings, key):
     """Each flag can be switched off in Settings > Flags (hidden everywhere; stored data is kept)."""
     return bool(settings.get("flags_on", {}).get(key, True))
 
+SERIF = "Georgia"        # the app title and margin notes only; notes stay in the UI font
+ROW_MARGIN = 76          # the full list's left margin: flag words and reminder times sit in it
+
+
+def serif_font(px, italic=True):
+    f = QFont(SERIF)
+    f.setPixelSize(px)
+    f.setItalic(italic)
+    return f
+
+
+def page_flag_css(kind, color):
+    """A flag mark on the page: its icon over a short dash in the flag's colour."""
+    return f'QWidget[page="true"] QToolButton#flag[kind="{kind}"] {{ border-bottom: 2px solid {color}; }}'
+
+
 def make_style():
     return f"""
 QWidget#panel {{ background: {C['bg']}; color: {C['text']}; }}
-QLabel#appTitle {{ color: {C['text']}; font-size: 15px; font-weight: 700; padding-left: 2px; }}
+QLabel#appTitle {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 17px; font-weight: 400;
+    padding-left: 2px; }}
 QLabel#appSub {{ color: {C['faint']}; font-size: 11px; padding-left: 3px; }}
 QWidget#roundwin {{ background: transparent; color: {C['text']}; }}
 QWidget#list, QWidget#listwrap {{ background: transparent; }}
@@ -1471,7 +1506,6 @@ QToolButton#flag[kind="glimmer"] {{ color: {C['glimmer']}; font-weight: 700; }}
 QToolButton#flag[kind="antiglimmer"] {{ color: {C['anti']}; font-weight: 700; }}
 QToolButton#flag[kind="glimmer"]:checked {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; border-color: {C['glimmer']}; font-weight: 700; }}
 QToolButton#flag[kind="antiglimmer"]:checked {{ color: {C['anti']}; background: {C['anti_bg']}; border-color: {C['anti']}; font-weight: 700; }}
-QFrame#card[tint="glimmer"] {{ background: {C['glimmer_bg']}; }}
 QLabel#chipDist {{ color: {C['dist']}; background: {C['dist_bg']}; border: 1px solid {C['dist']};
     border-radius: 4px; padding: 0px 6px; font-size: 10px; font-weight: 600; }}
 QToolButton#flag {{ color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 2px 9px;
@@ -1531,17 +1565,17 @@ QLabel#chipUrge {{ color: {C['urge']}; background: {C['urge_bg']}; border: 1px s
 QLabel#dropHint {{ color: {C['cream']}; background: {C['accent_soft']}; border: 1px dashed {C['accent']};
     border-radius: 6px; padding: 6px; font-size: 12px; }}
 QLabel#timerChip {{ color: {C['timer']}; font-size: 12px; }}
-QFrame#timerBar {{ background: {C['surface']}; border-radius: 8px; }}
-QToolButton#timerBtn {{ color: {C['text']}; font-size: 12px; padding: 3px 8px; }}
-QToolButton#startFocus {{ color: white; border: none; border-radius: 10px;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']});
+QFrame#timerBar {{ background: transparent; border-radius: 0; }}
+QToolButton#timerBtn {{ color: {C['text']}; font-size: 12px; padding: 3px 6px; text-decoration: underline;
+    background: transparent; }}
+QToolButton#startFocus {{ color: white; border: none; border-radius: 6px; background: {C['accent']};
     padding: 4px 11px 4px 8px; font-size: 12px; font-weight: 600; }}
 QToolButton#startFocus:hover {{ background: {C['accent_hover']}; }}
 QToolButton#startFocus:pressed {{ background: {C['accent']}; }}
-QToolButton#startBreak {{ color: {C['brk']}; background: transparent; border: 1px solid {C['brk']}; border-radius: 10px;
+QToolButton#startBreak {{ color: {C['brk']}; background: transparent; border: 1px solid {C['brk']}; border-radius: 6px;
     padding: 3px 11px 3px 8px; font-size: 12px; font-weight: 600; }}
 QToolButton#startBreak:hover {{ background: {C['brk_bg']}; }}
-QToolButton#timerBtn:hover {{ background: {C['border']}; }}
+QToolButton#timerBtn:hover {{ color: {C['accent_text']}; background: transparent; }}
 QDoubleSpinBox#minSpin {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 6px; padding: 4px 4px; font-size: 13px; min-width: 40px; max-width: 48px;
     selection-background-color: {C['accent']}; }}
@@ -1565,16 +1599,35 @@ QLineEdit#quick {{ padding: 9px 10px; font-size: 13px; }}
 QPlainTextEdit#quick {{ padding: 6px 7px; font-size: 13px; border-radius: 10px; }}
 QPlainTextEdit#quick:hover, QPlainTextEdit#qdetails:hover {{ border-color: {C['faint']}; }}
 QPlainTextEdit#quick:focus {{ border: 1px solid {C['accent']}; }}
+QWidget[page="true"] QPlainTextEdit#quick {{ background: transparent; border: none; border-bottom: 1px solid {C['faint']};
+    border-radius: 0; padding: 6px 2px 5px 2px; font-size: 14px; }}
+QWidget[page="true"] QPlainTextEdit#quick:hover {{ border-bottom: 1px solid {C['dim']}; }}
+QWidget[page="true"] QPlainTextEdit#quick:focus {{ border-bottom: 1px solid {C['accent']}; }}
+QWidget[page="true"] QToolButton#flag {{ border: none; border-bottom: 2px solid {C['faint']}; border-radius: 0;
+    padding: 2px 5px 1px 5px; }}
+QWidget[page="true"] QToolButton#flag:focus {{ color: {C['text']}; background: {C['surface_hi']}; }}
+{page_flag_css("urgent", C['urgent'])}
+{page_flag_css("distraction", C['dist'])}
+{page_flag_css("urge", C['urge'])}
+{page_flag_css("glimmer", C['glimmer'])}
+{page_flag_css("antiglimmer", C['anti'])}
+{page_flag_css("idea", C['idea'])}
 QPlainTextEdit#qdetails {{ font-size: 12px; padding: 2px 6px; border-radius: 10px; }}
 QPlainTextEdit#qdetails:focus {{ border: 1px solid {C['accent']}; }}
+QWidget[page="true"] QPlainTextEdit#qdetails {{ background: transparent; border: none; border-bottom: 1px solid {C['border']};
+    border-radius: 0; padding: 2px 2px 4px 2px; font-style: italic; color: {C['dim']}; }}
+QWidget[page="true"] QPlainTextEdit#qdetails:focus {{ border-bottom: 1px solid {C['accent']}; color: {C['text']}; }}
+QWidget[page="true"] QToolButton#remChip {{ background: transparent; border: none; border-bottom: 2px solid {C['faint']};
+    border-radius: 0; padding: 2px 5px 1px 5px; }}
+QWidget[page="true"] QToolButton#remChip:hover, QWidget[page="true"] QToolButton#remChip:focus {{
+    color: {C['text']}; background: {C['surface_hi']}; }}
+QWidget[page="true"] QToolButton#remChip[set="true"] {{ color: {C['accent_text']}; background: transparent;
+    border-bottom: 2px solid {C['accent']}; }}
 QTextEdit {{ background: transparent; color: {C['text']}; border: none; selection-background-color: {C['accent']}; }}
 QTextEdit#title {{ font-size: 13px; font-weight: 600; }}
-QTextEdit#details {{ background: transparent; border: none; font-size: 12px; color: {C['dim']}; }}
+QTextEdit#details {{ background: transparent; border: none; font-size: 12px; font-style: italic; color: {C['dim']}; }}
 QTextEdit#details:focus {{ background: {C['field']}; border-radius: 5px; color: {C['text']}; }}
-QFrame#card {{ background: {C['surface']}; border: 1px solid transparent; border-radius: 10px; }}
-QFrame#card[tint="urge"] {{ background: {C['urge_bg']}; }}
-QFrame#card[tint="urgent"] {{ background: {C['urgent_bg']}; }}
-QFrame#card[done="true"] {{ background: {C['done']}; }}
+QFrame#card {{ background: transparent; border: 1px solid transparent; border-radius: 0; }}
 QFrame#card[drag="true"] {{ border: 1px dashed {C['accent']}; }}
 QFrame#actions {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 11px; }}
 QToolButton {{ background: transparent; color: {C['dim']}; border: none; padding: 3px 6px; border-radius: 5px; }}
@@ -1590,9 +1643,8 @@ QToolButton#help:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
 QToolButton#headBtn {{ border: none; border-radius: 8px; background: transparent; }}
 QToolButton#headBtn:hover, QToolButton#headBtn:focus {{ background: {C['surface_hi']}; }}
 QToolButton#headBtn:pressed {{ background: {C['border']}; }}
-QToolButton#send {{ color: white; border: none; border-radius: 11px; padding: 3px 12px;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']});
-    font-size: 12px; font-weight: 600; }}
+QToolButton#send {{ color: white; border: none; border-radius: 6px; padding: 3px 12px;
+    background: {C['accent']}; font-size: 12px; font-weight: 600; }}
 QToolButton#send:hover {{ background: {C['accent_hover']}; }}
 QToolButton#send:pressed {{ background: {C['accent']}; }}
 QToolButton#send:disabled {{ color: {C['faint']}; background: {C['surface_hi']}; }}
@@ -1610,12 +1662,14 @@ QTabBar::tab:selected {{ color: {C['text']}; border-bottom: 2px solid {C['accent
 QTabBar::tab:hover {{ color: {C['text']}; }}
 QLabel#tabCount {{ background: {C['surface_hi']}; color: {C['dim']}; border: 1px solid {C['border']};
     border-radius: 8px; font-size: 10px; font-weight: 600; padding: 0px 5px; min-width: 6px; max-height: 15px; }}
-QFrame#helpPop {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 10px; }}
-QMenu {{ background: {C['surface_hi']}; color: {C['text']}; border: 1px solid {C['border']}; padding: 5px; }}
-QMenu::item {{ padding: 6px 20px 6px 14px; border-radius: 6px; }}
+QFrame#helpPop {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 8px; }}
+QLabel#helpHead {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 19px;
+    padding-bottom: 6px; border-bottom: 1px solid {C['border']}; }}
+QMenu {{ background: {C['bg']}; color: {C['text']}; border: 1px solid {C['border']}; padding: 5px; }}
+QMenu::item {{ padding: 6px 20px 6px 14px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {C['accent_soft']}; color: {C['text']}; }}
 QMenu::item:disabled {{ color: {C['faint']}; }}
-QMenu::separator {{ height: 1px; background: {C['border']}; margin: 4px 6px; }}
+QMenu::separator {{ height: 1px; background: {C['border']}; margin: 4px 10px; }}
 """
 
 
@@ -2253,6 +2307,36 @@ def timer_state_of(f):
     return "none" if f.get("in_focus") is False else "unknown"
 
 
+def focus_runs(sessions, gap=20 * 60):
+    """Focus rounds 20 min or less apart (a break between them included) chained into runs, oldest first:
+    [[(start, row), ...], ...]. sessions: focus log rows; other kinds are skipped."""
+    def when(iso):
+        try:
+            return datetime.fromisoformat(str(iso)).replace(tzinfo=None)
+        except ValueError:
+            return None
+    focus = sorted(((when(x.get("start")), x) for x in sessions
+                    if x.get("kind", "focus") == "focus" and when(x.get("start"))), key=lambda p: p[0])
+    runs, prev_end = [], None
+    for t, x in focus:
+        if prev_end and 0 <= (t - prev_end).total_seconds() <= gap:
+            runs[-1].append((t, x))
+        else:
+            runs.append([(t, x)])
+        prev_end = when(x.get("end")) or t
+    return runs
+
+
+def run_before(start):
+    """Focused minutes of the earlier rounds in the run that the round started at `start` (a timestamp, already in
+    the focus log) ends, oldest first. [] when it stands alone."""
+    at = datetime.fromtimestamp(start).replace(microsecond=0)
+    for run in reversed(focus_runs(read_jsonl(FOCUS_LOG))):
+        if any(t == at for t, _x in run):
+            return [x.get("focused_min") or 0 for t, x in run if t < at]
+    return []
+
+
 DAY_PARTS = (("After midnight (0-5)", 0, 5), ("Early (5-9)", 5, 9), ("Morning (9-12)", 9, 12),
              ("Afternoon (12-17)", 12, 17), ("Evening (17-21)", 17, 21), ("Night (21-24)", 21, 24))
 
@@ -2333,14 +2417,7 @@ def rhythm_section(thoughts, sessions, days=None):
                 f"| Usual first start (middle half) | {hm(_median(starts))} ({hm(q1)} to {hm(q3)}) |",
                 f"| Sessions started after 22:00 or before 05:00 | {late} ({pct(late, len(focus))}) |"]
 
-        # stretches: rounds with 20 min or less between them
-        chains, prev_end = [], None
-        for t, x in focus:
-            if prev_end and 0 <= (t - prev_end).total_seconds() <= 20 * 60:
-                chains[-1].append((t, x))
-            else:
-                chains.append([(t, x)])
-            prev_end = when(x.get("end")) or t
+        chains = focus_runs(sessions)            # stretches: rounds with 20 min or less between them
         longest = max(chains, key=lambda c: (len(c), sum(mins(x) for _t, x in c)))
         out.append("\n### Stretches (rounds 20 min or less apart)\n\n| Measure | Value |\n|---|---|")
         out += [f"| Stretches | {len(chains)}, average {len(focus) / len(chains):.1f} rounds each |",
@@ -2541,15 +2618,8 @@ def usage_stats(store, today=None):
     while day_focus.get(d):
         cur, d = cur + 1, d - timedelta(days=1)
 
-    chains, prev_end = [], None                  # stretches: rounds 20 min or less apart
-    for t, x in focus:
-        if prev_end and 0 <= (t - prev_end).total_seconds() <= 20 * 60:
-            chains[-1].append((t, x))
-        else:
-            chains.append([(t, x)])
-        prev_end = when(x.get("end")) or t
-    stretch = max(chains, key=lambda c: (len(c), sum(mins(x) for _t, x in c))) if chains else []
-    longest = max(focus, key=lambda p: mins(p[1])) if focus else None
+    runs = focus_runs(sessions)                  # rounds 20 min or less apart, breaks included, are one run
+    longest = max(runs, key=lambda r: sum(mins(x) for _t, x in r)) if runs else None
     big_day = max(day_focus.items(), key=lambda kv: kv[1]) if day_focus else None
     busy_day = max(day_thoughts.items(), key=lambda kv: kv[1]) if day_thoughts else None
 
@@ -2593,8 +2663,7 @@ def usage_stats(store, today=None):
         busy_day=busy_day, day_focus=day_focus, day_thoughts=day_thoughts, hours=hours, week=week,
         focus_n=len(focus), focus_min=focus_min, finished=sum(1 for _t, x in focus if x.get("completed")),
         streak=best, streak_now=cur,
-        longest=(mins(longest[1]), longest[0].date()) if longest else None,
-        stretch=(len(stretch), sum(mins(x) for _t, x in stretch), stretch[0][0].date()) if stretch else None,
+        longest=(sum(mins(x) for _t, x in longest), longest[0][0].date(), len(longest)) if longest else None,
         big_day=big_day, purposes=[(names[k], v) for k, v in top(purposes)], apps=top(apps),
         checkins=sum(1 for x in checkins if x.get("response") not in (None, "", "timeout", "snooze", "dismiss")),
         checkins_all=len(checkins), reminders=sum(r["reminders_rang"] for r in rows),
@@ -2652,7 +2721,9 @@ def usage_highlights(st):
         out.append(("\U0001F525", f"{st['streak']} focus days in a row, your best"
                     + (f". On a {st['streak_now']} day run now." if st["streak_now"] > 1 else ".")))
     if st["longest"] and st["longest"][0] >= 15:
-        out.append(("⏱️", f"Longest round: {fmt_minutes(st['longest'][0])} on {fmt_day(st['longest'][1])}"))
+        m, day, n = st["longest"]
+        out.append(("⏱️", f"Longest run: {fmt_minutes(m)} in a row ({n} rounds) on {fmt_day(day)}" if n > 1
+                    else f"Longest round: {fmt_minutes(m)} on {fmt_day(day)}"))
     if st["big_day"] and st["big_day"][1] >= 60:
         out.append(("\U0001F3C6", f"Biggest focus day: {fmt_minutes(st['big_day'][1])} on {fmt_day(st['big_day'][0])}"))
     if st["let_go"]:
@@ -2929,9 +3000,9 @@ class AnalysesDialog(QDialog):
         self.setWindowTitle("AI analyses")
         self.setObjectName("panel")
         self.setStyleSheet(STYLE + f"""
-            QListWidget {{ background: {C['surface']}; color: {C['text']}; border: 1px solid {C['border']};
-                border-radius: 8px; padding: 4px; outline: none; }}
-            QListWidget::item {{ padding: 6px 6px; border-radius: 6px; }}
+            QListWidget {{ background: transparent; color: {C['text']}; border: 1px solid {C['border']};
+                border-radius: 6px; padding: 4px; outline: none; }}
+            QListWidget::item {{ padding: 6px 6px; border-radius: 4px; }}
             QListWidget::item:selected {{ background: {C['accent']}; color: white; }}
             QListWidget::item:hover:!selected {{ background: {C['surface_hi']}; }}""")
         self.resize(760, 520)
@@ -3539,13 +3610,20 @@ def join_names(names):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
+def rest_of_today():
+    """When "the rest of today" ends: 6 AM tomorrow, so a late night still counts as today."""
+    return datetime.now().replace(hour=6, minute=0, second=0, microsecond=0).timestamp() + 86400
+
+
 class AppBlocker(QObject):
     """Keeps the apps you picked closed during focus sessions ("Block in every focus session") or for a block of minutes
     you start yourself, with short breaks. Opening one closes it again with a low tone and a line from the circle.
     At the end it says they're unblocked. Settings: block_apps (exe names, "pwa:<app id>" for an installed web app,
     closed by its window), block_with_focus;
     a running block lives in settings['block'] so it survives a restart, and each block is logged to focus_log.jsonl
-    (kind "block"). Apps are left alone while the mic or camera is in use (a call). The OS calls do nothing
+    (kind "block"). An app allowed for hours or the rest of today ("Allow...") is in settings['block_allow']
+    ({pick: until}), so it stays open across blocks and restarts until then.
+    Apps are left alone while the mic or camera is in use (a call). The OS calls do nothing
     outside Windows."""
     SWEEP_MS = 1500
     CAUGHT_GAP_S = 3           # ponytail: one tone and line per app at most this often (an app that restarts itself
@@ -3744,6 +3822,43 @@ class AppBlocker(QObject):
         self.say(f"{app_nice(pick)} is open for {fmt_min(round(float(minutes)))} min.", [], timeout_ms=4000,
                  emoji="\U0001F513")
 
+    ALLOWS = [("This block", "block"), ("2 h", 7200), ("4 h", 14400), ("Rest of today", "today")]
+
+    def long_allows(self):
+        """{pick: until} of picked apps allowed for hours or the rest of today; expired ones are dropped."""
+        al = self.store.settings.get("block_allow")
+        if not isinstance(al, dict):
+            return {}
+        now, picks = time.time(), self.picks()
+        for p in [p for p, u in al.items() if not isinstance(u, (int, float)) or u <= now]:
+            del al[p]
+        return {p: u for p, u in al.items() if p in picks}
+
+    def ask_allow(self, pick):
+        self.say(f"Allow {app_nice(pick)} for how long?", [(label, f"alw:{pick}_{span}") for label, span in self.ALLOWS],
+                 timeout_ms=20000)
+
+    def allow_long(self, pick, span):
+        """Let one app stay open: for this block ("block"), a number of seconds, or the rest of today ("today").
+        Hours and today outlast the block (settings block_allow)."""
+        if span == "block":
+            return self.stop_for(pick)
+        until = rest_of_today() if span == "today" else time.time() + float(span)
+        self.store.settings.setdefault("block_allow", {})[pick] = until
+        self._save()
+        self.changed.emit()
+        self.say(f"{app_nice(pick)} is allowed until {datetime.fromtimestamp(until):%H:%M}, in every block.", [],
+                 timeout_ms=5000, emoji="\U0001F513")
+
+    def block_again(self, pick):
+        """Undo an Allow: the app is blocked again (closed quietly if a block is on)."""
+        self.store.settings.get("block_allow", {}).pop(pick, None)
+        if self.block:
+            self.block.get("allow", {}).pop(pick, None)
+            self._quiet = True
+        self._save()
+        self.changed.emit()
+
     def stop_for(self, pick):
         """Unblock one app for the rest of this block; the others stay blocked."""
         b = self.block
@@ -3772,6 +3887,11 @@ class AppBlocker(QObject):
             QTimer.singleShot(0, self.ask_unblock)
         elif key.startswith("unstop:"):
             self.stop_for(key[7:])
+        elif key.startswith("allowapp:"):
+            QTimer.singleShot(0, lambda: self.ask_allow(key[9:]))
+        elif key.startswith("alw:"):
+            pick, _, span = key[4:].rpartition("_")
+            self.allow_long(pick, span if span in ("block", "today") else int(span))
         elif key.startswith("unb:") and key.rpartition("_")[2].isdigit():
             pick, _, n = key[4:].rpartition("_")
             self.allow(pick, int(n))
@@ -3798,6 +3918,9 @@ class AppBlocker(QObject):
         if b.get("until") and now >= b["until"]:
             self.end()
             return
+        if any(u <= now for u in self.store.settings.get("block_allow", {}).values()):
+            self.long_allows()                   # its hours are up: close it again, quietly
+            self._quiet = True
         allow = b.get("allow", {})
         for p, until in list(allow.items()):
             if now >= until:                     # its few minutes are up: close it again, quietly
@@ -3832,7 +3955,8 @@ class AppBlocker(QObject):
         """{pid: pick} of running processes that belong to a picked app (not the ones unblocked for a few
         minutes, unless allowed), plus {("win", hwnd): pick} for open windows of picked web apps."""
         b = self.block or {}
-        picks = [p for p in self.picks() if allowed or b.get("allow", {}).get(p, 0) <= time.time()]
+        long = self.long_allows()
+        picks = [p for p in self.picks() if (allowed or b.get("allow", {}).get(p, 0) <= time.time()) and p not in long]
         if not picks:
             return {}
         procs = running_apps() if procs is None else procs
@@ -3880,8 +4004,7 @@ class AppBlocker(QObject):
                 one = fresh[0] if len(fresh) == 1 else None
                 n = tries[one] if one else 1
                 many = len(self.picks()) > 1
-                btns = ([("Pause", f"unbapp:{one}")] + ([("Stop for this app", f"unstop:{one}")] if many else [])
-                        if one else [("Pause", "pause")])
+                btns = [("Pause", f"unbapp:{one}"), ("Allow...", f"allowapp:{one}")] if one else [("Pause", "pause")]
                 self.say(f"{join_names([app_nice(p) for p in fresh])} {'is' if one else 'are'} {left}"
                          + (f" You've tried to open it {n} times." if n > 1 else ""),
                          btns + [("Stop for all" if many else "Stop", "stop")], keys=False)
@@ -3912,6 +4035,161 @@ def send_phone_push(topic, title, message, priority=4, on_done=None):
             except Exception:
                 pass
     threading.Thread(target=go, daemon=True).start()
+
+
+class PhoneSync(QObject):
+    """The phone page (phone/Code.gs, a web app in your own Google account). Off until its link is pasted in
+    Settings > Phone. Every 20 s: post the open notes there, take back what you did on the phone (ops) and
+    apply each once. An op's uid stays in settings["phone_sync_acked"] until the server has dropped it."""
+    EVERY_MS = 20000
+
+    def __init__(self, store, on_change=None, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.on_change = on_change or (lambda: None)
+        self.status = "Not set up"
+        self._last, self._sent_at, self._thread, self._result = None, 0.0, None, None
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(self.EVERY_MS)
+        self._poll = QTimer(self)
+        self._poll.setInterval(200)
+        self._poll.timeout.connect(self._finish)
+        QTimer.singleShot(3000, self.tick)
+
+    def url(self):
+        return str(self.store.settings.get("phone_sync_url", "")).strip()
+
+    def snapshot(self):
+        s = self.store.settings
+        notes = [{"id": t["id"], "title": t.get("title", ""), "desc": t.get("desc", ""),
+                  "flags": [k for k in FLAG_KEYS if t.get(k)], "reminder": t.get("reminder"),
+                  "later": bool(t.get("later"))} for t in self.store.all_tasks() if not t.get("done")]
+        return {"notes": notes, "flags": [{"key": k, "icon": i, "word": w} for k, i, w, _ in FLAG_DEFS if flag_on(s, k)],
+                "topic": s.get("ntfy_topic", "")}
+
+    def tick(self):
+        url = self.url()
+        if not url.startswith("https://") or self._thread is not None:
+            return
+        snap = self.snapshot()
+        fresh = snap != self._last or time.time() - self._sent_at > 600
+        body = json.dumps({"acked": list(self.store.settings.get("phone_sync_acked", [])),
+                           "snap": snap if fresh else None}).encode("utf-8")
+
+        def go():
+            try:
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as r:   # Google answers with a redirect; urllib follows it
+                    self._result = (snap if fresh else None, json.loads(r.read().decode("utf-8")))
+            except Exception as e:
+                self._result = (None, {"error": str(e)})
+        self._thread = threading.Thread(target=go, daemon=True)
+        self._thread.start()
+        self._poll.start()
+
+    def _finish(self):
+        if self._thread is None or self._thread.is_alive():
+            return
+        self._poll.stop()
+        self._thread = None
+        sent, resp = self._result or (None, {"error": "no answer"})
+        self._result = None
+        self.receive(sent, resp)
+
+    def receive(self, sent, resp):
+        """Apply one answer from the server. Split from the network so tests can feed it directly."""
+        if not isinstance(resp, dict) or "error" in resp or not isinstance(resp.get("ops"), list):
+            self.status = "Couldn't reach it: " + str((resp or {}).get("error", "bad answer"))[:120]
+            log_error(f"phone sync: {self.status}")
+            return
+        if sent is not None:
+            self._last, self._sent_at = sent, time.time()
+        s = self.store.settings
+        acked = list(s.get("phone_sync_acked", []))
+        changed = False
+        for op in resp["ops"]:
+            if not isinstance(op, dict) or not op.get("uid") or op["uid"] in acked:
+                continue
+            try:
+                changed = self.apply(op) or changed
+            except Exception as e:
+                log_error(f"phone sync op failed: {e}")
+            acked.append(op["uid"])
+        live = {op.get("uid") for op in resp["ops"] if isinstance(op, dict)}
+        acked = [u for u in acked if u in live]        # the server dropped the rest: no need to send them again
+        if acked != s.get("phone_sync_acked", []):
+            s["phone_sync_acked"] = acked
+            self.store.save()
+        self.status = "Synced " + datetime.now().strftime("%H:%M")
+        if changed:
+            self.on_change()
+        if acked:
+            QTimer.singleShot(1000, self.tick)         # tell the server soon, and send it the new picture
+
+    @staticmethod
+    def _reminder(r):
+        if not isinstance(r, dict):
+            return None
+        try:
+            at = parse_reminder_at(str(r["at"]))
+        except (KeyError, ValueError, TypeError):
+            return None
+        out = {"at": at.isoformat(timespec="seconds"), "rings": int(r.get("rings", 3)),
+               "interval_min": int(r.get("interval_min", 1))}
+        if r.get("repeat"):
+            out["repeat"] = r["repeat"]
+        return out
+
+    def apply(self, op):
+        """One phone change. Returns True if a note changed. Unknown or stale ops are skipped."""
+        st = self.store
+        kind, tid = op.get("op"), op.get("id")
+        t = next((x for x in st.all_tasks() if x["id"] == tid), None)
+        if kind == "add":
+            title = str(op.get("title", "")).strip()[:5000]
+            if t is not None or not title:
+                return False
+            t = st.new_task(title, source="phone", log=False)
+            if isinstance(tid, str) and re.fullmatch(r"[0-9a-f]{10}", tid):
+                t["id"] = tid
+            try:
+                t["created"] = datetime.fromisoformat(str(op.get("created"))).replace(tzinfo=None).isoformat(timespec="seconds")
+            except ValueError:
+                pass
+            t["focus"] = {"in_focus": False}            # parked on the phone, not during a focus round here
+            for k in op.get("flags") or []:
+                if k in FLAG_KEYS:
+                    t[k] = True
+            r = self._reminder(op.get("reminder"))
+            if r:
+                t["reminder"] = r
+            st.log_captured(t)
+        elif t is None or t.get("done"):
+            return False
+        elif kind == "done":
+            t["done"], t["done_at"] = True, datetime.now().isoformat(timespec="seconds")
+            st.log_event("done", t, source="phone")
+            l = st.list_of(t)
+            l["tasks"].remove(t)
+            l["tasks"].append(t)                          # done sinks to the bottom, as in the list
+        elif kind == "letgo":
+            st.let_go(t)
+        elif kind == "flags":
+            for k, on in (op.get("flags") or {}).items():
+                if k in FLAG_KEYS and bool(t.get(k)) != bool(on):
+                    t[k] = bool(on)
+                    st.log_event(f"{k}_{'on' if on else 'off'}", t, source="phone")
+        elif kind == "remind":
+            r = self._reminder(op.get("reminder"))
+            if r:
+                t["reminder"] = r
+            else:
+                t.pop("reminder", None)
+        else:
+            return False
+        st.save()
+        return True
 
 
 def fmt_min(m):
@@ -4376,7 +4654,7 @@ class SpeechBubble(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setStyleSheet(STYLE + f"""
             QLabel#say {{ color: {C['text']}; font-size: 12px; }}
-            QPushButton#chip {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 10px;
+            QPushButton#chip {{ background: transparent; border: 1px solid {C['border']}; border-radius: 6px;
                 padding: 5px 11px; font-size: 12px; min-height: 14px; }}
             QPushButton#chip:hover {{ background: {C['accent']}; border-color: {C['accent']}; }}
             QPushButton#chip:focus {{ border-color: {C['text']}; }}
@@ -4447,7 +4725,7 @@ class SpeechBubble(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -9, -1) if self.tail_right else QRectF(self.rect()).adjusted(9, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(r, 12, 12)
+        path.addRoundedRect(r, 8, 8)
         cy = min(r.bottom() - 14, max(r.top() + 14, self._tail_y))
         tail = QPainterPath()
         if self.tail_right:
@@ -4459,8 +4737,8 @@ class SpeechBubble(QWidget):
             tail.lineTo(r.left() - 8, cy)
             tail.lineTo(r.left() + 1, cy + 7)
         path = path.united(tail)
-        p.setBrush(QColor(C["surface_hi"]))
-        p.setPen(QPen(QColor(C["accent"]), 1.2))
+        p.setBrush(QColor(C["bg"]))                     # a page, like the list; the edge is a soft veil, not red
+        p.setPen(QPen(veil(40 if theme_dark() else 60), 1))
         p.drawPath(path)
 
     def say(self, circle_rect, text, buttons=(), timeout_ms=7000, emoji=None, anim="bounce",
@@ -5160,7 +5438,9 @@ class NudgeManager(QObject):
             self.active_s = float(saved[0])
         self._asked = None
         self._focus_event_span = None
+        self.pending = None                # a check-in waiting as a dot: (line, face, anim, asked, event span, at)
         self.speech.closed.connect(self._answered)
+        timer.started.connect(self.drop_pending)
         self.tick = QTimer(self)
         self.tick.setInterval(30000)
         self.tick.timeout.connect(self._tick)
@@ -5191,6 +5471,8 @@ class NudgeManager(QObject):
         return None
 
     def _tick(self):
+        if self.pending and time.time() - self.pending[5] > self.PENDING_S:
+            self.drop_pending()
         now = time.monotonic()
         elapsed = max(0.0, min(60.0, now - self._last_tick))
         self._last_tick = now
@@ -5263,6 +5545,8 @@ class NudgeManager(QObject):
         """One line on what check-ins are doing right now (Settings and the circle's menu show it)."""
         if not self._st("nudge_on", True):
             return "Check-ins are off"
+        if self.pending:
+            return "A check-in is waiting as a dot on the circle. Click the circle to see it"
         until = self._st("nudge_paused_until", 0)
         if until > time.time():
             return "Check-in messages paused " + self.paused_text(until)
@@ -5314,11 +5598,39 @@ class NudgeManager(QObject):
         # The popup may show an event title, but the focus log and AI export never retain it.
         self._asked = None if preview else ("A calendar event is coming up. Want a focus round?"
                                             if calendar_event else msg)
+        if not preview and self._st("checkin_style", "card") == "dot":
+            self.pending = (msg, face, anim, self._asked, self._focus_event_span, time.time())
+            self._asked = self._focus_event_span = None
+            self._set_waiting(True)
+            return
         self.bubble.hop()
-        self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=
-                         [("Start focus", "focus"), ("Take a break", "break"), ("Forgot the timer", "working"),
-                          ("Other task came up", "other_task"), ("I'm on track", "fine"), ("Ask me later", "snooze")],
-                         timeout_ms=30000, keys=True)
+        self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=self.CHECKIN_BUTTONS +
+                        [("Show as a dot", "dot")], timeout_ms=30000, keys=True)
+
+    CHECKIN_BUTTONS = [("Start focus", "focus"), ("Take a break", "break"), ("Forgot the timer", "working"),
+                       ("Other task came up", "other_task"), ("I'm on track", "fine"), ("Ask me later", "snooze")]
+    PENDING_S = 30 * 60                   # a waiting check-in goes stale after this
+
+    def _set_waiting(self, on):
+        self.bubble.waiting = on
+        self.bubble.update()
+
+    def drop_pending(self):
+        if self.pending:
+            self.pending = None
+            self._set_waiting(False)
+
+    def show_pending(self):
+        """The circle was clicked while a check-in waits as a dot: show it now. True if it did."""
+        pend = self.pending
+        self.drop_pending()
+        if not pend or self.timer.running or time.time() - pend[5] > self.PENDING_S:
+            return False
+        msg, face, anim, self._asked, self._focus_event_span, _at = pend
+        self.bubble.hop()
+        self.speech.say(self.bubble.geometry(), msg, emoji=face, anim=anim, buttons=self.CHECKIN_BUTTONS,
+                        timeout_ms=30000, keys=True)
+        return True
 
     def _checkin_work(self, preview=False):
         """Name the nearest open work sometimes, without turning every check-in into the same reminder."""
@@ -5640,6 +5952,13 @@ class NudgeManager(QObject):
                 self.store.settings["nudge_active"] = [round(self.active_s), time.time()]
                 self.store.save()
             return
+        if key == "dot":                   # not an answer: just how check-ins show from now on
+            self.store.settings["checkin_style"] = "dot"
+            self.store.save()
+            QTimer.singleShot(0, lambda: self._say_followup(
+                "OK. Check-ins now wait as a small dot on the circle. Click the circle to see one. "
+                "Change it back in Settings > Check-ins.", [], None, timeout_ms=7000))
+            return
         FocusTimer._write({"kind": "checkin", "start": datetime.now().isoformat(timespec="seconds"),
                            "end": datetime.now().isoformat(timespec="seconds"), "message": msg, "response": key})
         event_span, self._focus_event_span = self._focus_event_span, None
@@ -5662,7 +5981,7 @@ class NudgeManager(QObject):
         if seconds == "forever":
             until = self.PAUSE_FOREVER
         elif seconds == "today":
-            until = datetime.now().replace(hour=6, minute=0, second=0, microsecond=0).timestamp() + 86400
+            until = rest_of_today()
         else:
             until = time.time() + seconds
         self.store.settings["nudge_paused_until"] = until
@@ -5846,21 +6165,22 @@ class SessionCard(QWidget):
             QLabel#quip {{ color: {C['text']}; font-size: 14px; font-weight: 600; }}
             QLabel#statNum {{ color: {C['text']}; font-size: 22px; font-weight: 700; }}
             QLabel#statLbl {{ color: {C['dim']}; font-size: 11px; }}
+            QLabel#plus {{ color: {C['timer']}; font-size: 15px; font-weight: 700; }}
             QLabel#todayLine {{ color: {C['dim']}; font-size: 11px; padding: 6px 0 0 0;
                 border-top: 1px solid {C['border']}; }}
-            QLabel#head {{ color: {C['accent_text']}; font-size: 12px; font-weight: 700; }}
+            QLabel#head {{ color: {C['accent_text']}; font-family: {SERIF}; font-style: italic; font-size: 15px; }}
             QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                padding: 6px 12px; border-radius: 8px; font-weight: 600; }}
-            QPushButton#primary:hover {{ background: #b54552; }}
-            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}
+                padding: 6px 12px; border-radius: 6px; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: {C['accent_hover']}; }}
+            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 6px; }}
             QLabel#markQ {{ color: {C['dim']}; font-size: 12px; }}
-            QPushButton#appChip {{ background: transparent; padding: 7px 10px; border-radius: 8px; }}
+            QPushButton#appChip {{ background: transparent; padding: 7px 10px; border-radius: 6px; }}
             QPushButton#appChip:checked {{ background: {C['dist']}; color: {C['surface']}; border-color: {C['dist']};
                 font-weight: 700; }}
-            QLabel#netLine {{ background: {C['accent_soft']}; color: {C['accent_text']}; border-radius: 8px;
+            QLabel#netLine {{ background: {C['accent_soft']}; color: {C['accent_text']}; border-radius: 6px;
                 padding: 8px 10px; font-size: 13px; font-weight: 700; }}
-            QLineEdit#nextFocusMinutes {{ background: {C['surface_hi']}; color: {C['text']};
-                border: 1px solid {C['border']}; border-radius: 7px; padding: 6px 8px; }}""")
+            QLineEdit#nextFocusMinutes {{ background: {C['field']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 6px; padding: 6px 8px; }}""")
         self.W = 352
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 18)
@@ -5877,10 +6197,11 @@ class SessionCard(QWidget):
         self.quip = QLabel()
         self.quip.setObjectName("quip")
         self.quip.setWordWrap(True)
-        self.face = EmojiFace(34)
+        self.enso = EnsoMark(13, self)           # the round, closed: drawn whole in the focus colour
+        self.enso.color = "timer"
         qrow = QHBoxLayout()
-        qrow.setSpacing(8)
-        qrow.addWidget(self.face, 0, Qt.AlignTop)
+        qrow.setSpacing(10)
+        qrow.addWidget(self.enso, 0, Qt.AlignTop)
         qrow.addWidget(self.quip, 1)
         lay.addLayout(qrow)
         grid = QGridLayout()
@@ -5900,6 +6221,19 @@ class SessionCard(QWidget):
             self.nums.append(n)
             self.lbls.append(lbl)
         lay.addLayout(grid)
+        self.run_prev = 0                         # minutes of the earlier rounds in this run
+        self.plus = QLabel(self)                  # "+25" rising off the total when a run grows
+        self.plus.setObjectName("plus")
+        self.plus.hide()
+        self.plus_fx = QGraphicsOpacityEffect(self.plus)
+        self.plus.setGraphicsEffect(self.plus_fx)
+        self.count_anim = QVariantAnimation(self)
+        self.count_anim.setStartValue(0.0)
+        self.count_anim.setEndValue(1.0)
+        self.count_anim.setDuration(900)
+        self.count_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.count_anim.valueChanged.connect(self._count_step)
+        self.count_anim.finished.connect(lambda: (self.plus.hide(), self._count_step(1.0)))
         self.today = QLabel()
         self.today.setObjectName("todayLine")
         self.today.setWordWrap(True)
@@ -6004,17 +6338,23 @@ class SessionCard(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setBrush(QColor(C["surface_hi"]))
-        p.setPen(QPen(QColor(C["border"]), 1))
-        p.drawRoundedRect(r, 12, 12)
+        p.setBrush(QColor(C["bg"]))                     # a page, like the list
+        p.setPen(QPen(veil(40 if theme_dark() else 60), 1))
+        p.drawRoundedRect(r, 8, 8)
 
     def show_for(self, circle_rect, minutes, parked, urges, dists, break_min, focus_min, auto_break=False,
-                 glimmers=0, today="", on="", apps=None, marks=None, blocked=""):
-        face, anim, line = session_quip(minutes, parked, urges, dists, glimmers)
+                 glimmers=0, today="", on="", apps=None, marks=None, blocked="", run=()):
+        """run: focused minutes of the earlier rounds in this run (20 min or less apart); the minutes add up."""
+        line = session_quip(minutes, parked, urges, dists, glimmers)[2]
+        run = [m for m in run if m > 0]
+        self.run_prev = sum(run)
+        if run:
+            total = fmt_min(self.run_prev + minutes)
+            line += "\n" + (" + ".join(fmt_min(m) for m in run + [minutes]) + f" = {total} min in a row"
+                            if len(run) < 4 else f"{len(run) + 1} rounds, {total} min in a row")
         self.blocked_line.setText("\U0001F6AB " + blocked if blocked else "")
         self.blocked_line.setVisible(bool(blocked))
         self.quip.setText(line)
-        self.face.set(face, anim)
         self.today.setText(today)
         self.today.setVisible(bool(today))
         head = "Focus complete \u00B7 break started" if auto_break else "Focus complete"
@@ -6023,7 +6363,10 @@ class SessionCard(QWidget):
         self._taken = 0                          # minutes taken out on this card, 0 = not yet
         self._build_app_buttons()
         self._show_apps()
-        data = [(fmt_min(minutes), "min focused"), (str(parked), "thoughts parked"),
+        self.count_anim.stop()
+        self.plus.hide()
+        data = [(fmt_min(self.run_prev if run else minutes), "min in a row" if run else "min focused"),
+                (str(parked), "thoughts parked"),
                 (str(urges), "itches noted" if urges != 1 else "itch noted"),
                 (str(dists), "interruptions noted" if dists != 1 else "interruption noted")]
         for (n, l), wn, wl in zip(data, self.nums, self.lbls):
@@ -6065,6 +6408,30 @@ class SessionCard(QWidget):
         self.anim.setEasingCurve(QEasingCurve.OutBack)
         self.anim.start()
         self.auto.start(30000)
+        if run:
+            QTimer.singleShot(0 if reduced_motion() else 450, self._count_up)
+
+    def _count_up(self):
+        """A run grows: its minutes count up from the rounds before to the new total, a "+25" rising off them."""
+        if reduced_motion():
+            return self._count_step(1.0)
+        self.plus.setText(f"+{fmt_min(self.focus_min)}")
+        self.plus.adjustSize()
+        g = self.nums[0].geometry()
+        self._plus_at = QPoint(g.right() - self.plus.width() // 2, g.top() - 4)
+        self.plus.move(self._plus_at)
+        self.plus.show()
+        self.plus.raise_()
+        self.count_anim.stop()
+        self.count_anim.start()
+
+    def _count_step(self, t):
+        t = float(t)
+        a, b = self.run_prev, self.run_prev + self.focus_min
+        self.nums[0].setText(fmt_min(b if t >= 1 else round(a + (b - a) * t)))
+        if self.plus.isVisible():
+            self.plus.move(self._plus_at - QPoint(0, round(16 * t)))
+            self.plus_fx.setOpacity(1.0 - t)
 
     def _fit_open_card(self):
         self.anim.stop()
@@ -6142,7 +6509,7 @@ class SessionCard(QWidget):
         taken = self.on_take_out(n) if (self.on_take_out and n) else 0
         if taken:
             self.focus_min = max(0, self.focus_min - taken)
-            self.nums[0].setText(fmt_min(self.focus_min))
+            self.nums[0].setText(fmt_min(self.run_prev + self.focus_min))
             self._taken = taken
             self._show_apps()
             self._fit_open_card()
@@ -6255,11 +6622,156 @@ CIRCLE_COLORS = {"white": ("White", "#ffffff", "#eef3f9", "#aebfd2", "#ffffff"),
                  "mustard": ("Mustard", "#e6c46a", "#a8822a", "#56420f", "#eecf7a"),
                  "graphite": ("Graphite", "#8e939c", "#4a4e56", "#202328", "#9ea3ab")}
 CIRCLE_LOOKS = [("auto", ("Auto: white on dark, midnight on light", "#ffffff"))] + list(CIRCLE_COLORS.items())
-CIRCLE_SHAPES = {"cloud": "Thought cloud", "circle": "Circle", "squircle": "Squircle (soft square)",
+CIRCLE_SHAPES = {"inkcloud": "Thought cloud (ink)", "enso": "Ens\u014d (ink circle)", "cloud": "Thought cloud (glossy)", "circle": "Circle", "squircle": "Squircle (soft square)",
                  "pebble": "Pebble (hand-made look)", "capsule": "Capsule (wide and calm)",
                  "diamond": "Soft diamond", "oval": "Oval (tall and simple)",
                  "hexagon": "Soft hexagon", "speech": "Speech bubble"}
 CIRCLE_SIZES = {"small": ("Small", 0.82), "medium": ("Medium", 1.0), "large": ("Large", 1.22), "xl": ("Extra large", 1.45)}
+ENSO_STEPS = 360
+_ENSO_CACHE = {}     # (r, width) -> outline points around (0, 0); built once per size, never per paint
+INK_SHAPES = ("inkcloud", "enso")   # drawn in page ink on the page colour: they follow the theme, never breathe
+_INKCLOUD_CACHE = {}  # B -> (outline points from the top, clockwise; their running lengths; the two small bubbles)
+
+
+def _enso_points(r, width):
+    """The enso's outline around (0, 0): a brush stroke that starts low right, runs clockwise and stops short,
+    thick at the start and dry at the tail. Returns (outer, inner, cap): one point per step, plus a round start."""
+    key = (round(r, 2), round(width, 2))
+    if key in _ENSO_CACHE:
+        return _ENSO_CACHE[key]
+    outer, inner, mids = [], [], []
+    for i in range(ENSO_STEPS + 1):
+        f = i / ENSO_STEPS
+        a = math.radians(-62 - 322 * f)
+        rr = r * (1 + 0.025 * math.sin(f * 7.0) - 0.03 * f)       # a hand-drawn wobble, closing in a little
+        w = width * (0.35 + 0.65 * math.sin(math.pi * min(1.0, f * 1.25 + 0.05)) ** 0.5) * (1 - 0.55 * f ** 3)
+        ox, oy = math.cos(a), -math.sin(a)
+        outer.append(QPointF(ox * (rr + w / 2), oy * (rr + w / 2)))
+        inner.append(QPointF(ox * (rr - w / 2), oy * (rr - w / 2)))
+        mids.append((ox * rr, oy * rr, ox, oy, w))
+    mx, my, ox, oy, w = mids[0]
+    tx, ty = mids[1][0] - mx, mids[1][1] - my                   # direction of the stroke at its start
+    n = math.hypot(tx, ty) or 1.0
+    tx, ty = tx / n, ty / n
+    cap = [QPointF(mx - w / 2 * (ox * math.cos(q) + tx * math.sin(q)),
+                   my - w / 2 * (oy * math.cos(q) + ty * math.sin(q)))
+           for q in (math.pi * j / 10 for j in range(1, 10))]   # inner edge, round the back, to the outer edge
+    _ENSO_CACHE[key] = (outer, inner, cap)
+    return _ENSO_CACHE[key]
+
+
+def paint_enso(p, center, r, width, upto=1.0, color=None, alpha=1.0):
+    """The enso brush circle at center, drawn up to `upto` (0..1) of its stroke: one drawPolygon.
+    Colour defaults to the page ink."""
+    k = int(ENSO_STEPS * max(0.0, min(1.0, upto))) + 1
+    if k < 2:
+        return
+    outer, inner, cap = _enso_points(r, width)
+    col = QColor(color or C["text"])
+    col.setAlphaF(col.alphaF() * max(0.0, min(1.0, alpha)))
+    p.save()
+    p.translate(center)
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    p.drawPolygon(QPolygonF(outer[:k] + inner[k - 1::-1] + cap))
+    p.restore()
+
+
+def _inkcloud_outline(B):
+    """The thought cloud's outline around (0, 0) as points that start at its top and run clockwise, with the
+    distance walked to each, so focus can fill an exact share of it. Built once per size, never per paint."""
+    key = round(B, 2)
+    if key in _INKCLOUD_CACHE:
+        return _INKCLOUD_CACHE[key]
+    k = B / 16.0
+    full = cloud_path(0, B)
+    polys = sorted(full.toSubpathPolygons(), key=lambda q: -q.boundingRect().width())
+    pts = [QPointF(q) for q in polys[0]]
+    if len(pts) > 1 and pts[0] == pts[-1]:
+        pts.pop()
+    if sum(a.x() * b.y() - b.x() * a.y() for a, b in zip(pts, pts[1:] + pts[:1])) < 0:
+        pts.reverse()                                   # clockwise on screen (y runs down)
+    top = min(range(len(pts)), key=lambda i: (pts[i].y(), abs(pts[i].x())))
+    pts = pts[top:] + pts[:top + 1]                     # from the top, all the way round
+    lens = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        lens.append(lens[-1] + math.hypot(b.x() - a.x(), b.y() - a.y()))
+    dots = [(QPointF(dx * k, dy * k), r * k) for dx, dy, r in ((-12, 14.5, 3.0), (-16.5, 18.5, 1.9))]
+    _INKCLOUD_CACHE[key] = (pts, lens, dots)
+    return _INKCLOUD_CACHE[key]
+
+
+def paint_inkcloud(p, B, width, upto=1.0, color=None, alpha=1.0):
+    """The cloud's outline at (0, 0) in ink, drawn up to `upto` (0..1) of the way round from its top."""
+    pts, lens, _dots = _inkcloud_outline(B)
+    want = lens[-1] * max(0.0, min(1.0, upto))
+    if want <= 0:
+        return
+    i = next((j for j, d in enumerate(lens) if d >= want), len(lens) - 1)
+    line = pts[:i]
+    if i and lens[i] > lens[i - 1]:                     # the last bit, cut where the share ends
+        t = (want - lens[i - 1]) / (lens[i] - lens[i - 1])
+        a, b = pts[i - 1], pts[i]
+        line.append(QPointF(a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t))
+    col = QColor(color or C["text"])
+    col.setAlphaF(col.alphaF() * max(0.0, min(1.0, alpha)))
+    p.save()
+    p.setPen(QPen(col, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.setBrush(Qt.NoBrush)
+    p.drawPolyline(QPolygonF(line))
+    p.restore()
+
+
+def paint_swipe(p, rect, color):
+    """A highlighter under the lower half of a line of text."""
+    p.save()
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(color))
+    p.drawRoundedRect(QRectF(rect.left() - 2, rect.top() + rect.height() * 0.5, rect.width() + 4,
+                             rect.height() * 0.42), 2, 2)
+    p.restore()
+
+
+class EnsoMark(QWidget):
+    """A small enso: the mark beside the app title, and on the focus line the time done in its colour."""
+
+    def __init__(self, r=6.0, parent=None):
+        super().__init__(parent)
+        self.r, self.upto, self.color = r, 1.0, None     # color None: page ink; a C key follows the theme
+        self.setFixedSize(int(2 * r + 6), int(2 * r + 6))
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        mid, w = QPointF(self.width() / 2, self.height() / 2), max(1.6, self.r * 0.32)
+        if self.color is None:
+            paint_enso(p, mid, self.r, w)
+        else:
+            color = C.get(self.color, self.color)
+            paint_enso(p, mid, self.r, w, alpha=0.18)
+            paint_enso(p, mid, self.r, w, self.upto, color)
+
+
+class SealMark(QWidget):
+    """A small seal-red stamp with a white line icon: the mark on a reminder slip. Painted from C, so it follows
+    the theme."""
+
+    def __init__(self, size=20, icon="bell", parent=None):
+        super().__init__(parent)
+        self.icon = icon
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(C["accent"]))
+        r = QRectF(self.rect())
+        p.drawRoundedRect(r, r.width() * 0.18, r.width() * 0.18)      # square-ish, like the count seal
+        k = round(self.width() * 0.08)
+        line_icon(self.icon, "#ffffff").paint(p, self.rect().adjusted(k, k, -k, -k))
 
 
 class Bubble(QWidget):
@@ -6287,7 +6799,8 @@ class Bubble(QWidget):
         self.timer_display = "time"  # ring | time | hidden
         self.ring_style = "ember"    # see RING_STYLES
         self.color_key = "white"     # see CIRCLE_COLORS; "auto" = white on dark, midnight on light
-        self.shape = "cloud"         # see CIRCLE_SHAPES
+        self.shape = "inkcloud"      # see CIRCLE_SHAPES
+        self.waiting = False         # a check-in waits as a small dot (Settings > Check-ins > Show as)
         self.scale = 1.0
         self.drop_handler = None     # callable(QMimeData) -> bool, set by main()
         self._drag_hover = False
@@ -6362,7 +6875,7 @@ class Bubble(QWidget):
                 self.setFixedSize(self.SIZE, self.SIZE)
                 self.move(centre.x() - self.SIZE // 2, centre.y() - self.SIZE // 2)
                 self.moved.emit(self.pos())
-        self.update()
+        self.refresh_shape()          # also starts or stops the idle breath (the enso never breathes)
 
     def _body_path(self, c, B):
         path = QPainterPath()
@@ -6412,7 +6925,7 @@ class Bubble(QWidget):
 
     def _animated(self):
         """The 30 fps loop only runs for styles that move; Minimal just repaints once a second."""
-        return self._burning() and self.ring_style != "minimal"
+        return self._burning() and self.ring_style != "minimal" and self.shape not in INK_SHAPES
 
     def _overrun(self):
         t = self.timer
@@ -6427,7 +6940,7 @@ class Bubble(QWidget):
             self.anim.start()
         elif not want and self.anim.isActive():
             self.anim.stop()
-        calm = not want and self.isVisible() and not reduced_motion()
+        calm = not want and self.isVisible() and self.shape not in INK_SHAPES and not reduced_motion()
         if calm != self.breath.isActive():
             self.breath.start() if calm else self.breath.stop()
         self.update()
@@ -6640,6 +7153,11 @@ class Bubble(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.translate(0, self._hop_y)
+        if self.shape in INK_SHAPES:
+            p.save()
+            self._paint_enso_look(p)
+            p.restore()
+            return self._paint_waiting(p)
         S, c, R, B = self.SIZE, self.SIZE / 2, self.RING_R, self.BODY_R
         now = time.monotonic() - self._t0
 
@@ -6786,6 +7304,105 @@ class Bubble(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(255, 255, 255, 200))
             p.drawEllipse(QRectF(c - 2.8, c - 2.8, 5.6, 5.6))
+        self._paint_waiting(p)
+
+    def _paint_waiting(self, p):
+        """A check-in is waiting: a small seal-red dot at the top right. Clicking the circle shows it."""
+        if not self.waiting:
+            return
+        s, c = self.scale, self.SIZE / 2
+        p.setPen(QPen(QColor(C["surface"]), 1.5 * s))
+        p.setBrush(QColor(C["accent"]))
+        p.drawEllipse(QPointF(c + 15 * s, c - 15 * s), 4 * s, 4 * s)
+
+    def _paint_enso_look(self, p):
+        """The ink looks: the thought cloud (the default) or the enso, in page ink on the page colour, with a small
+        seal for the count. Focus fills the ink in timer red (a break in its green), the rest stays a faint 16%.
+        Nothing moves while idle."""
+        s, c = self.scale, self.SIZE / 2
+        hov, prs = self.hover_e.v, self.press_e.v
+        D, r, w = 22 * s, 14 * s, 3.8 * s              # page disc, enso radius, brush width
+        p.translate(c, c)
+        k = 1.0 - 0.04 * prs                            # a press pushes it in to 0.96
+        p.scale(k, k)
+        mid = QPointF(0, 0)
+        t = self.timer
+        if self.shape == "inkcloud":
+            B, cw = 21.5 * s, 2.4 * s                    # cloud size, ink width
+            p.translate(0, -3.6 * B / 16)                # the cloud sits a little high: its bubbles trail below
+            body = cloud_path(0, B)
+            p.setPen(Qt.NoPen)
+            for dy, a in ((1.0 + hov + 1.4 * s, 34 if theme_dark() else 18), (1.0, 46 if theme_dark() else 22)):
+                p.setBrush(QColor(0, 0, 0, a))           # a soft drop shadow, then a contact one
+                p.drawPath(body.translated(0, dy))
+            p.translate(0, -hov)                         # hover lifts the page 1 px off its shadow
+            p.setBrush(QColor(C["surface"]))
+            p.drawPath(body)
+            _pts, _lens, dots = _inkcloud_outline(B)
+            p.setPen(QPen(QColor(C["text"]), cw * 0.8))
+            for at, rr in dots:                          # ink inside each bubble's edge, so the two never touch
+                p.drawEllipse(at, rr - cw * 0.4, rr - cw * 0.4)
+            if t and t.running and self.timer_display != "hidden":
+                done = 1.0 - max(0.0, min(1.0, t.progress()))
+                paint_inkcloud(p, B, cw, alpha=0.16)
+                paint_inkcloud(p, B, cw + 0.6 * s, done, C["brk"] if t.kind == "break" else C["timer"],
+                               0.55 if t.paused else 1.0)
+            elif self._overrun():                        # a break ran over: the cloud breathes amber
+                now = time.monotonic() - self._t0
+                paint_inkcloud(p, B, cw, color=C["warn"], alpha=0.6 + 0.4 * math.sin(now * 3.2))
+            else:
+                paint_inkcloud(p, B, cw)
+            D, r = B * 1.05, 11 * s                      # where the save ring and the countdown go
+            mid = QPointF(0, 0.5 * s)
+        else:
+            paint_shadow(p, QRectF(-D, -D, 2 * D, 2 * D), D, 3, drop=1.0 + hov)
+            p.translate(0, -hov)                        # hover lifts the page 1 px off its shadow
+            p.setPen(QPen(QColor(C["hint_border"]), 1))
+            p.setBrush(QColor(C["surface"]))
+            p.drawEllipse(QPointF(0, 0), D - 0.5, D - 0.5)
+            if t and t.running and self.timer_display != "hidden":
+                done = 1.0 - max(0.0, min(1.0, t.progress()))
+                paint_enso(p, mid, r, w, alpha=0.16)
+                paint_enso(p, mid, r, w, done, C["brk"] if t.kind == "break" else C["timer"], 0.55 if t.paused else 1.0)
+            elif self._overrun():                       # a break ran over: the enso breathes amber
+                now = time.monotonic() - self._t0
+                paint_enso(p, mid, r, w, color=C["warn"], alpha=0.6 + 0.4 * math.sin(now * 3.2))
+            else:
+                paint_enso(p, mid, r, w)
+        p.setBrush(Qt.NoBrush)
+        if not self.save_ok:
+            p.setPen(QPen(QColor(C["warn"]), 1.4, Qt.DashLine))
+            p.drawEllipse(QPointF(0, 0), D + 2.5, D + 2.5)
+        if self._drag_hover:
+            p.setPen(QPen(QColor(C["accent"]), 1.6, Qt.DashLine))
+            p.drawEllipse(QPointF(0, 0), D - 3, D - 3)
+        if t and t.running and self.timer_display == "time":
+            left = t.remaining()
+            txt = fmt_mmss(left) if left < 100 * 60 else f"{math.ceil(left / 60)}m"
+            f = QFont()
+            f.setBold(True)
+            px = max(7, int(10 * s))                     # as big as the old looks' countdown
+            f.setPixelSize(px)
+            while px > max(6, int(7 * s)) and QFontMetrics(f).horizontalAdvance(txt) > 2 * (r - w / 2):
+                px -= 1
+                f.setPixelSize(px)
+            p.setFont(f)
+            p.setPen(QColor(C["text"]))
+            p.drawText(QRectF(-r, -r, 2 * r, 2 * r), Qt.AlignCenter, txt)
+        if self.show_count and self.count:              # the seal sits in the enso's gap, low right
+            f = QFont()
+            f.setBold(True)
+            f.setPixelSize(max(7, round(8 * s)))
+            txt = str(self.count)
+            h = 11 * s
+            sw = max(h, QFontMetrics(f).horizontalAdvance(txt) + 4 * s)
+            seal = QRectF(10.5 * s - sw / 2, 10.5 * s - h / 2, sw, h)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C["accent"]))
+            p.drawRoundedRect(seal, 2 * s, 2 * s)
+            p.setFont(f)
+            p.setPen(Qt.white)
+            p.drawText(seal, Qt.AlignCenter, txt)
 
     def enterEvent(self, e):
         self.hover_e.to(1.0)
@@ -7052,7 +7669,7 @@ class RoundCheck(QAbstractButton):
             p.setBrush(QColor(C["accent"]))
             p.drawEllipse(r)
         else:
-            p.setPen(QPen(QColor(C["text"] if self._hover else C["faint"]), 1.6))
+            p.setPen(QPen(QColor(C["text"] if self._hover else C["faint"]), 1.3))
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(r)
         if self.isChecked() or self._hover:
@@ -7503,33 +8120,34 @@ class ReminderDialog(QDialog):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.removed = False
         self.setStyleSheet(full_style() + f"""
-            QFrame#remInner {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 12px; }}
-            QLabel#remHead {{ color: {C['text']}; font-size: 13px; font-weight: 700; }}
-            QLabel#remSub {{ color: {C['dim']}; font-size: 11px; font-weight: 700; }}
+            QFrame#remInner {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 8px; }}
+            QLabel#remHead {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 16px;
+                font-weight: 400; }}
+            QLabel#remSub {{ color: {C['dim']}; font-family: {SERIF}; font-style: italic; font-size: 14px;
+                font-weight: 400; }}
             QLabel#remPreview {{ color: {C['dim']}; font-size: 12px; }}
             QLabel#remPreview[bad="true"] {{ color: {C['anti']}; }}
-            QPushButton#quick {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 9px;
+            QPushButton#quick {{ background: transparent; border: 1px solid {C['border']}; border-radius: 6px;
                 padding: 6px 4px; font-size: 12px; min-width: 72px; }}
-            QPushButton#quick:hover, QPushButton#quick:focus {{ background: {C['accent_soft']};
-                border-color: {C['accent']}; color: white; }}
-            QFrame#remTabs {{ background: {C['field']}; border: 1px solid {C['border']}; border-radius: 9px; }}
-            QPushButton#remTab {{ background: transparent; border: none; border-radius: 7px; color: {C['dim']};
+            QPushButton#quick:hover, QPushButton#quick:focus {{ border-color: {C['accent']}; color: {C['accent_text']}; }}
+            QFrame#remTabs {{ background: transparent; border: 1px solid {C['border']}; border-radius: 6px; }}
+            QPushButton#remTab {{ background: transparent; border: none; border-radius: 5px; color: {C['dim']};
                 padding: 4px 10px; font-size: 12px; font-weight: 600; }}
             QPushButton#remTab:hover, QPushButton#remTab:focus {{ color: {C['text']}; }}
-            QPushButton#remTab:checked {{ background: {C['surface_hi']}; color: {C['text']}; }}
+            QPushButton#remTab:checked {{ background: {C['accent']}; color: white; }}
             QToolButton#remMore {{ background: transparent; border: none; color: {C['faint']}; font-size: 11px;
                 padding: 2px 0; }}
             QToolButton#remMore:hover, QToolButton#remMore:focus {{ color: {C['text']}; }}
             QComboBox {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
-                border-radius: 8px; padding: 5px 8px; font-size: 12px; }}
+                border-radius: 6px; padding: 5px 8px; font-size: 12px; }}
             QComboBox:hover, QComboBox:focus {{ border-color: {C['faint']}; }}
             QComboBox::drop-down {{ border: none; width: 18px; }}
             QComboBox QAbstractItemView {{ background: {C['surface_hi']}; color: {C['text']};
                 border: 1px solid {C['border']}; selection-background-color: {C['accent']}; outline: none; }}
             QComboBox QLineEdit {{ background: transparent; border: none; padding: 0; }}
             QPushButton#setRem {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                border-radius: 8px; padding: 6px 14px; font-weight: 700; }}
-            QPushButton#setRem:hover {{ background: #b54552; }}
+                border-radius: 6px; padding: 6px 14px; font-weight: 700; }}
+            QPushButton#setRem:hover {{ background: {C['accent_hover']}; }}
             QPushButton#setRem:disabled {{ background: {C['surface']}; border-color: {C['border']}; color: {C['faint']}; }}
             QPushButton#removeRem {{ background: transparent; border: none; color: {C['faint']}; padding: 6px 4px; }}
             QPushButton#removeRem:hover {{ color: {C['anti']}; }}""")
@@ -7543,9 +8161,7 @@ class ReminderDialog(QDialog):
         v.setSpacing(8)
         hrow = QHBoxLayout()
         hrow.setSpacing(7)
-        bell = QLabel(inner)
-        bell.setPixmap(line_icon("bell", C["accent_text"]).pixmap(15, 15))
-        hrow.addWidget(bell)
+        hrow.addWidget(SealMark(18, parent=inner))
         head = QLabel("Snooze until" if snooze else "Change reminder" if current else "Remind me", inner)
         head.setObjectName("remHead")
         hrow.addWidget(head)
@@ -7914,16 +8530,16 @@ class AskDialog(QDialog):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.limits = limits
         self.setStyleSheet(full_style() + f"""
-            QFrame#askInner {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 12px; }}
-            QLabel#askHead {{ color: {C['text']}; font-size: 13px; font-weight: 700; }}
+            QFrame#askInner {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 8px; }}
+            QLabel#askHead {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 17px; }}
             QLabel#askUnit {{ color: {C['dim']}; font-size: 12px; }}
-            QPushButton#quick {{ background: {C['surface']}; border: 1px solid {C['border']}; border-radius: 9px;
+            QPushButton#quick {{ background: transparent; border: 1px solid {C['border']}; border-radius: 6px;
                 padding: 6px 8px; font-size: 12px; min-width: 36px; }}
             QPushButton#quick:hover, QPushButton#quick:focus {{ background: {C['accent_soft']};
-                border-color: {C['accent']}; color: white; }}
+                border-color: {C['accent']}; color: {C['text']}; }}
             QPushButton#askOk {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                border-radius: 8px; padding: 6px 14px; font-weight: 700; }}
-            QPushButton#askOk:hover {{ background: #b54552; }}""")
+                border-radius: 6px; padding: 6px 14px; font-weight: 700; }}
+            QPushButton#askOk:hover {{ background: {C['accent_hover']}; }}""")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         inner = QFrame(self)
@@ -8145,14 +8761,8 @@ class ReminderAlert(QDialog):
         self.task, self.tasks = task, {task["id"]: task}
         lay = self._shell(task, settings, answered, bubble)
         repeat = repeat_text((task.get("reminder") or {}).get("repeat"))
-        heading = QLabel("Note reminder" + (f" · repeats {repeat}" if repeat else ""), self)
-        heading.setStyleSheet(f"color: {C['accent_text']}; font-size: 12px; font-weight: 700;")
-        lay.addWidget(heading)
+        self.heading = self._heading(lay, "Note reminder" + (f" · repeats {repeat}" if repeat else ""))
         title_row = QHBoxLayout()
-        title_row.setSpacing(9)
-        self.face = EmojiFace(34)
-        self.face.set("\u23f0", "bounce")
-        title_row.addWidget(self.face, 0, Qt.AlignTop)
         self.open_link = None
         if note_actions:
             title = self.open_link = LinkTitle(task.get("title", "Untitled"), self)
@@ -8179,6 +8789,7 @@ class ReminderAlert(QDialog):
             scroll.setWidgetResizable(True)
             scroll.setMaximumHeight(180)
             scroll.setFrameShape(QFrame.NoFrame)
+            self.details_scroll = scroll
             scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
             lay.addWidget(scroll)
         self._snooze_row(lay, "Snooze for")
@@ -8217,11 +8828,14 @@ class ReminderAlert(QDialog):
         self.setStyleSheet(f"""
             QDialog#reminderAlert {{ background: transparent; border: none; }}
             QDialog#reminderAlert QLabel {{ color: {C['text']}; }}
-            QDialog#reminderAlert QPushButton {{ background: {C['surface_hi']}; color: {C['text']};
-                border: 1px solid {C['border']}; border-radius: 7px; padding: 5px 10px; }}
-            QDialog#reminderAlert QPushButton:hover {{ background: {C['accent_soft']}; }}
+            QDialog#reminderAlert QLabel#remHeading {{ color: {C['accent_text']}; font-family: {SERIF};
+                font-style: italic; font-size: 15px; }}
+            QDialog#reminderAlert QPushButton {{ background: transparent; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 10px; }}
+            QDialog#reminderAlert QPushButton:hover {{ border-color: {C['accent']}; color: {C['accent_text']}; }}
             QDialog#reminderAlert QPushButton#snoozeDefault {{ background: {C['accent']}; color: white;
                 border-color: {C['accent']}; }}
+            QDialog#reminderAlert QPushButton#snoozeDefault:hover {{ background: {C['accent_hover']}; color: white; }}
             QDialog#reminderAlert QPushButton:focus {{ border-color: {C['text']}; }}
             QDialog#reminderAlert QPushButton#snoozeMenu {{ padding-right: 22px; }}
             QDialog#reminderAlert QPushButton::menu-indicator {{ subcontrol-origin: padding;
@@ -8252,6 +8866,17 @@ class ReminderAlert(QDialog):
         self.anim.setEasingCurve(QEasingCurve.OutBack)
         self.anim.valueChanged.connect(self._step)
         return lay
+
+    def _heading(self, lay, text):
+        """The slip's head: the seal, then the heading as a Georgia italic margin note. Returns the label."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(SealMark(20, parent=self), 0, Qt.AlignVCenter)
+        label = QLabel(text, self)
+        label.setObjectName("remHeading")
+        row.addWidget(label, 1)
+        lay.addLayout(row)
+        return label
 
     def _snooze_row(self, lay, label):
         lay.addWidget(QLabel(label, self))
@@ -8291,7 +8916,7 @@ class ReminderAlert(QDialog):
         r = (QRectF(self.rect()).adjusted(1, 1, -10, -1) if self.tail_right else
              QRectF(self.rect()).adjusted(10, 1, -1, -1))
         path = QPainterPath()
-        path.addRoundedRect(r, 15, 15)
+        path.addRoundedRect(r, 8, 8)
         cy = min(r.bottom() - 19, max(r.top() + 19, self._tail_y))
         tail = QPainterPath()
         if self.tail_right:
@@ -8302,8 +8927,8 @@ class ReminderAlert(QDialog):
             tail.moveTo(r.left() + 1, cy - 9)
             tail.lineTo(r.left() - 9, cy)
             tail.lineTo(r.left() + 1, cy + 9)
-        p.setBrush(QColor(C["surface_hi"]))
-        p.setPen(QPen(QColor(C["accent"]), 1.6))
+        p.setBrush(QColor(C["bg"]))                     # a paper slip, the list's page colour; the seal is the red
+        p.setPen(QPen(veil(40 if theme_dark() else 60), 1))
         p.drawPath(path.united(tail) if self.show_tail else path)
 
     def show_from_cloud(self):
@@ -8313,6 +8938,11 @@ class ReminderAlert(QDialog):
         width = min(430, max(300, area.width() - 20))
         self.setFixedWidth(width)
         self.layout().activate()
+        sc = getattr(self, "details_scroll", None)
+        if sc:                       # the details' own lines at this width, not an empty band around one short line
+            m = self.layout().contentsMargins()      # the viewport is not laid out before the first show
+            sc.setMaximumHeight(min(180, sc.widget().heightForWidth(width - m.left() - m.right()) + 2))
+            self.layout().activate()
         height = max(self.sizeHint().height(), self.layout().minimumSize().height()) + 4
         self.setFixedHeight(min(height, area.height() - 12))
         if circle:
@@ -8394,9 +9024,7 @@ class ReminderGroupAlert(ReminderAlert):
         QDialog.__init__(self, None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.tasks, self.rows = {t["id"]: t for t in tasks}, {}
         lay = self._shell(tasks[0], settings, answered, bubble)
-        self.heading = QLabel(self)
-        self.heading.setStyleSheet(f"color: {C['accent_text']}; font-size: 12px; font-weight: 700;")
-        lay.addWidget(self.heading)
+        self.heading = self._heading(lay, "")
         box = QWidget()
         col = QVBoxLayout(box)
         col.setContentsMargins(0, 0, 0, 0)
@@ -8569,6 +9197,21 @@ class NoteAlarmManager(QObject):
             self.panel.open_task(task)
 
 
+class RuledPage(QWidget):
+    """The full list's page: a seal-red margin rule down the left and a faint rule between notes."""
+
+    def paintEvent(self, e):
+        cards = sorted((w for w in self.children() if isinstance(w, TaskCard) and not w.isHidden()), key=lambda c: c.y())
+        if not cards:
+            return
+        p = QPainter(self)
+        rule = QColor(C["border"])
+        for a, b in zip(cards, cards[1:]):
+            p.fillRect(QRect(0, (a.geometry().bottom() + 1 + b.y()) // 2, self.width(), 1), rule)
+        top, bottom = cards[0].y(), cards[-1].geometry().bottom() + 1
+        p.fillRect(QRect(ROW_MARGIN - 1, top, 1, bottom - top), _blend(C["bg"], C["accent"], 0.45))
+
+
 class TaskCard(QFrame):
     """One task: title (wraps), details (shown when there are any), attachments.
     Clicking the title makes the task active: the flag toggles, an 'Add details' line and a paste/drop hint
@@ -8583,35 +9226,20 @@ class TaskCard(QFrame):
         self.setProperty("done", bool(task["done"]))
         outer = QHBoxLayout(self)
         self.outer = outer
-        outer.setContentsMargins(10, 9, 10, 9)
+        outer.setContentsMargins(ROW_MARGIN + 10, 8, 4, 9)   # the margin holds the flag words and reminder time
         self.hover = Ease(self)
         outer.setSpacing(9)
-
-        chk = RoundCheck(task["done"])
-        chk.setToolTip("Mark done" if not task["done"] else "Mark not done")
-        chk.toggled.connect(lambda on: panel.set_done(task, on))
-        outer.addWidget(chk, 0, Qt.AlignTop)
 
         body = QVBoxLayout()
         body.setSpacing(3)
         body.setContentsMargins(0, 0, 0, 0)
         outer.addLayout(body, 1)
 
-        self.chip_row = QWidget()
-        cr = QHBoxLayout(self.chip_row)
-        cr.setContentsMargins(0, 0, 0, 0)
-        cr.setSpacing(5)
-        self.chips = {}
-        for key in FLAG_KEYS:
-            text, tip, kind = FLAG_CHIPS[key]
-            chip = QLabel(text)
-            chip.setObjectName("chip")
-            chip.setProperty("kind", kind)
-            chip.setToolTip(tip)
-            cr.addWidget(chip)
-            self.chips[key] = chip
-        cr.addStretch(1)
-        body.addWidget(self.chip_row)
+        self.chk = chk = RoundCheck(task["done"])
+        chk.setToolTip("Mark done" if not task["done"] else "Mark not done")
+        chk.toggled.connect(lambda on: panel.set_done(task, on))
+        outer.addWidget(chk, 0, Qt.AlignTop)
+        self.margin = []        # (word, kind, tip) per flag on: painted in the margin, in the flag's colour
 
         self.title = AutoText(task["title"], "Untitled", single_line=True)
         self.title.setObjectName("title")
@@ -8625,15 +9253,18 @@ class TaskCard(QFrame):
 
         self.reminder_status = QToolButton(self)
         self.reminder_status.setObjectName("reminderStatus")
-        self.reminder_status.setStyleSheet(
+        self.reminder_status.setStyleSheet(          # a plum tag in the margin, under the flag words: a bell and the time
             f"QToolButton#reminderStatus {{ color: {C['rem_fg']}; background: {C['rem_bg']}; "
-            f"border: 1px solid {C['rem_border']}; border-radius: 8px; padding: 4px 9px; font-size: 12px; "
-            f"font-weight: 700; }} QToolButton#reminderStatus:hover {{ background: {C['rem_hover']}; }}")
+            f"border: 1px solid {C['rem_border']}; border-radius: 4px; padding: 0px 3px; font-size: 11px; "
+            f"font-weight: 600; }} "
+            f"QToolButton#reminderStatus:hover, QToolButton#reminderStatus:focus {{ background: {C['rem_hover']}; "
+            f"text-decoration: underline; }}")
+        self.reminder_status.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.reminder_status.setIconSize(QSize(10, 10))
+        self._bell_color = None
         self.reminder_status.setCursor(Qt.PointingHandCursor)
-        self.reminder_status.setToolTip("Change or remove this reminder")
         self.reminder_status.setFocusPolicy(Qt.StrongFocus)
         self.reminder_status.clicked.connect(self._edit_reminder)
-        body.addWidget(self.reminder_status, 0, Qt.AlignLeft)
         self._refresh_reminder()
 
         self.itch_status = QLabel()
@@ -8781,12 +9412,43 @@ class TaskCard(QFrame):
             self.itch_status.clear()
         self.itch_status.setVisible(bool(started or actions))
 
+    MARGIN_TOP, MARGIN_LINE = 10, 16
+
     def _refresh_reminder(self):
         value = self.task.get("reminder")
-        label = "\u23f0 " + reminder_label(value)
-        self.reminder_status.setText(label)
-        self.reminder_status.setAccessibleName(label + ". Click to change or remove it")
+        short = reminder_short(value) if value else ""
+        words = short.split(" ")
+        f = QFont()
+        f.setPixelSize(11)
+        f.setWeight(QFont.DemiBold)
+        if QFontMetrics(f).horizontalAdvance(short) > ROW_MARGIN - 29 and len(words) > 2:   # 29: bell, padding, border
+            cut_at = -2 if words[-1] in ("AM", "PM") else -1      # the time stays on one line
+            short = " ".join(words[:cut_at]) + "\n" + " ".join(words[cut_at:])
+        self.reminder_status.setText(short)
+        label = (reminder_label(value) + ". Click to change or remove it") if value else ""
+        self.reminder_status.setToolTip(label)
+        self.reminder_status.setAccessibleName(label)
         self.reminder_status.setVisible(bool(value))
+        self._tint_bell()
+        self._fit_margin()
+
+    def _tint_bell(self):
+        """The bell is a picture, so it is re-baked when the theme changes the reminder colour."""
+        if self._bell_color != C["rem_fg"]:
+            self._bell_color = C["rem_fg"]
+            self.reminder_status.setIcon(line_icon("bell", C["rem_fg"]))
+
+    def _fit_margin(self):
+        """The reminder time sits right-aligned in the margin under the flag words; the row grows to fit them."""
+        y = self.MARGIN_TOP + self.MARGIN_LINE * len(self.margin)
+        if self.task.get("reminder"):
+            rs = self.reminder_status
+            rs.adjustSize()
+            rs.resize(min(rs.width(), ROW_MARGIN - 8), rs.height())   # ponytail: clips a too-long time, never spills
+            rs.move(ROW_MARGIN - 6 - rs.width(), y)
+            y += rs.height()
+        self.setMinimumHeight(y + 6 if y > self.MARGIN_TOP else 0)
+        self.update()
 
     def _edit_reminder(self):
         anchor = self.sender() if isinstance(self.sender(), QWidget) else None
@@ -8807,9 +9469,9 @@ class TaskCard(QFrame):
         live = not t["done"]
         st = self.panel.store.settings
         on = {k: bool(t.get(k)) and live and flag_on(st, k) for k in FLAG_KEYS}
-        for k, chip in self.chips.items():
-            chip.setVisible(on[k])
-        self.chip_row.setVisible(any(on.values()))
+        self.margin = [(FLAG_CHIPS[k][0].split(" ", 1)[-1].split(" · ")[0], FLAG_CHIPS[k][2], FLAG_CHIPS[k][1])
+                       for k in FLAG_KEYS if on[k]]
+        self._fit_margin()
         stripe = next((kind for k, kind in (("urgent", "urgent"), ("antiglimmer", "anti"), ("distraction", "dist"),
                                             ("glimmer", "glimmer"), ("urge", "urge"), ("idea", "idea"))
                        + tuple((k, k) for k in FLAG_KEYS if k not in BUILTIN_FLAG_KEYS) if on.get(k)), "")
@@ -8977,44 +9639,61 @@ class TaskCard(QFrame):
     FLAG_TONE = {"urgent": "urgent", "anti": "anti", "dist": "dist", "glimmer": "glimmer", "urge": "urge",
                  "idea": "idea"}
 
+    def _tone(self, kind):
+        return QColor(C[self.FLAG_TONE[kind]] if kind in self.FLAG_TONE else FLAG_COLORS.get(kind, C["dim"]))
+
     def paintEvent(self, e):
+        """A ruled row on the page: the flag words in the margin, a highlighter under a flagged title. The row you're
+        on (keys or mouse) gets a page-tone fill and a 2 px seal tick in the margin; hover eases a lighter fill in."""
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75)
-        dark = theme_dark()
+        text_side = QRectF(ROW_MARGIN, 0, self.width() - ROW_MARGIN, self.height())
         p.setPen(Qt.NoPen)
+        if self.is_current():
+            p.setBrush(QColor(C["surface_hi"]))
+            p.drawRect(text_side)
+            p.setBrush(QColor(C["accent"]))
+            p.drawRoundedRect(QRectF(ROW_MARGIN - 5, 6, 2, max(6, self.height() - 12)), 1, 1)
+        elif self.hover.v:
+            fill = QColor(C["surface_hi"])
+            fill.setAlphaF(0.6 * self.hover.v)
+            p.setBrush(fill)
+            p.drawRect(text_side)
         kind = self.property("stripe")
-        if kind and not self.task["done"]:
-            tone = QColor(C[self.FLAG_TONE[kind]] if kind in self.FLAG_TONE else FLAG_COLORS.get(kind, C["dim"]))
-            wash = QLinearGradient(r.left(), 0, r.left() + min(r.width(), 260.0), 0)
-            for at, a in ((0.0, 46 if dark else 26), (1.0, 0)):
-                c = QColor(tone)
-                c.setAlpha(a)
-                wash.setColorAt(at, c)
+        if kind == "urgent" and not self.task["done"]:      # urgent shouts: a red wash, a bar at the edge, bolder ink
+            wash = QColor(C["urgent_bg"])
+            wash.setAlphaF(0.75)
             p.setBrush(wash)
-            p.drawRoundedRect(r, 9, 9)
-            ring = QColor(tone)
-            ring.setAlpha(70 if dark else 90)
-            p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(ring, 1))
-            p.drawRoundedRect(r, 9, 9)
-            p.setPen(Qt.NoPen)
-        p.setPen(QPen(QColor(255, 255, 255, 12) if dark else QColor(0, 0, 0, 0), 1))     # light catches the top edge
-        p.drawLine(QPointF(r.left() + 9, r.top() + 0.5), QPointF(r.right() - 9, r.top() + 0.5))
-        p.setPen(QPen(QColor(0, 0, 0, 46 if dark else 13), 1))                           # and a shade below
-        p.drawLine(QPointF(r.left() + 9, r.bottom() - 0.25), QPointF(r.right() - 9, r.bottom() - 0.25))
-        p.setPen(Qt.NoPen)
-        if not self.is_current():
-            if self.hover.v:
-                p.setBrush(veil(int(9 * self.hover.v)))
-                p.drawRoundedRect(r, 9, 9)
-            return
-        p.setBrush(veil(13))                            # a touch lighter (darker on light), on any tint
-        p.drawRoundedRect(r, 9, 9)
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(veil(95), 1.5))                   # soft neutral ring: never fights the flag colours
-        p.drawRoundedRect(r, 9, 9)
+            p.drawRect(text_side)
+            p.setBrush(QColor(C["urgent"]))
+            p.drawRect(QRectF(0, 0, 3, self.height()))
+        if kind and not self.task["done"]:
+            swipe = self._tone(kind)
+            swipe.setAlphaF((0.34 if theme_dark() else 0.38) if kind == "urgent" else (0.20 if theme_dark() else 0.26))
+            doc = self.title.document()
+            off = QPointF(self.title.viewport().mapTo(self, QPoint(0, 0)))
+            block = doc.begin()
+            while block.isValid():
+                lay = block.layout()
+                top = doc.documentLayout().blockBoundingRect(block).topLeft() + off
+                for i in range(lay.lineCount() if lay is not None else 0):
+                    line = lay.lineAt(i).naturalTextRect()
+                    if line.width() > 0:
+                        paint_swipe(p, line.translated(top), swipe)
+                block = block.next()
+        if self.margin:
+            loud = QFont()
+            loud.setPixelSize(12)
+            loud.setBold(True)
+            for i, (word, kind, _tip) in enumerate(self.margin):
+                p.setFont(loud if kind == "urgent" else serif_font(12))   # upright and bold: it reads before the rest
+                r = QRectF(2, self.MARGIN_TOP + self.MARGIN_LINE * i, ROW_MARGIN - 10, self.MARGIN_LINE)
+                p.setPen(self._tone(kind))
+                p.drawText(r, Qt.AlignRight | Qt.AlignVCenter,
+                           p.fontMetrics().elidedText(word, Qt.ElideRight, int(r.width())))
+        if self.task.get("reminder"):
+            self._tint_bell()
 
     def _focus_action(self, i):
         if not self.act_btns:
@@ -9089,6 +9768,11 @@ class TaskCard(QFrame):
         m.exec(e.globalPos())
 
     def event(self, e):
+        if e.type() == QEvent.ToolTip and e.pos().x() < ROW_MARGIN:      # a flag word: what that flag means
+            i = int((e.pos().y() - self.MARGIN_TOP) // self.MARGIN_LINE)
+            if 0 <= i < len(self.margin) and e.pos().y() >= self.MARGIN_TOP:
+                QToolTip.showText(e.globalPos(), self.margin[i][2], self)
+                return True
         # Tab on a selected card goes to its Later / Let go buttons (Qt would otherwise move focus away)
         if e.type() == QEvent.KeyPress and self.hasFocus() and e.key() in (Qt.Key_Tab, Qt.Key_Backtab):
             self._focus_action(0 if e.key() == Qt.Key_Tab else -1)
@@ -9451,8 +10135,9 @@ class SendButton(QAbstractButton):
     """Round Park button with a paper plane, beside the text boxes (like sending a chat message). Greyed out until
     something is typed. Click it, or Tab to it and press Enter or Space."""
 
-    def __init__(self, parent, on_click, edits):
+    def __init__(self, parent, on_click, edits, ink=False):
         super().__init__(parent)
+        self.ink = ink                         # the full list's page: a filled ink circle with a page-coloured plane
         self.setFixedSize(40, 40)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -9513,7 +10198,12 @@ class SendButton(QAbstractButton):
         k = 1.0 - 0.07 * self.press.v                 # a press pushes it in a touch
         p.scale(k, k)
         p.setPen(Qt.NoPen)
-        if on:      # lit: a soft shadow under a gradient body (lighter on hover) with a sheen across the top
+        if on and self.ink:
+            body = _blend(C["text"], C["accent"], 0.35 * hov)
+            p.setBrush(body)
+            p.drawEllipse(QPointF(0, 0), 18, 18)
+            gap = body
+        elif on:      # lit: a soft shadow under a gradient body (lighter on hover) with a sheen across the top
             p.setBrush(QColor(0, 0, 0, 55 if theme_dark() else 30))
             p.drawEllipse(QPointF(0, 1.4), 17.6, 17.6)
             top, bottom = QColor(C["accent_hover"]), QColor(C["accent"])
@@ -9533,7 +10223,8 @@ class SendButton(QAbstractButton):
             p.drawEllipse(QPointF(0, 0), 18, 18)
             gap = QColor(C["surface_hi"])
         if fly > 0:                                   # the tick fades in where the plane was
-            tick = QColor(255, 255, 255, int(255 * min(1.0, fly * 1.4)))
+            tick = QColor(C["bg"] if self.ink else "white")
+            tick.setAlpha(int(255 * min(1.0, fly * 1.4)))
             pen = QPen(tick, 2.4)
             pen.setCapStyle(Qt.RoundCap)
             pen.setJoinStyle(Qt.RoundJoin)
@@ -9557,7 +10248,7 @@ class SendButton(QAbstractButton):
             plane.lineTo(-6, 0)
             plane.closeSubpath()
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor("white") if on else QColor(C["faint"]))
+            p.setBrush(QColor(C["bg"] if self.ink else "white") if on else QColor(C["faint"]))
             p.drawPath(plane)
             p.setPen(QPen(gap, 1.6))
             p.drawLine(QPointF(-6, 0), QPointF(3, 0))
@@ -10048,7 +10739,11 @@ class HelpPopup(QFrame):
         self.setStyleSheet(STYLE)
         self.store = store
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(8)
+        self.head = QLabel("How it works", self)
+        self.head.setObjectName("helpHead")
+        lay.addWidget(self.head)
         self.label = QLabel()
         self.label.setTextFormat(Qt.RichText)
         self.label.setWordWrap(True)
@@ -10070,7 +10765,7 @@ class HelpPopup(QFrame):
                                "Mark work finished or open Finished to bring it back."),
             ("Details", "Click a task's title and press Enter, or click the task, to add details."),
             ("Attach", "Paste (Ctrl+V) or drop a photo or file onto a task."),
-            (f"{URGENT_ICON} Urgent", "Really needs doing soon. Urgent thoughts sit at the top, with a red edge."),
+            (f"{URGENT_ICON} Urgent", "Really needs doing soon. Urgent thoughts sit at the top, marked in red."),
             (f"{DIST_ICON} Distraction", "Something from outside broke your focus (a knock, a ping, noise)."),
             (f"{URGE_ICON} Itch", "A pull from inside that feels urgent but can wait. Parked, no guilt."),
             (f"{GLIMMER_ICON} Lift / {ANTI_ICON} drain", "A small good moment / a small moment that put you on edge. "
@@ -10098,8 +10793,10 @@ class HelpPopup(QFrame):
             ("Resize", "Drag the left, right or bottom edge, or the dotted corner."),
             ("Timer &amp; settings", "Right-click the circle."),
         ]
-        html = "<table cellspacing='0' cellpadding='3'>" + "".join(
-            f"<tr><td valign='top' style='color:{C['dim']};padding-right:10px;white-space:nowrap'><b>{a}</b></td>"
+        serif = lambda m: f"<span style='font-family:{SERIF};font-style:italic;font-size:14px'>{m.group()}</span>"  # noqa: E731
+        html = "<table cellspacing='0' cellpadding='3'>" + "".join(       # words in Georgia; Georgia has no flag icons
+            f"<tr><td valign='top' style='color:{C['dim']};padding-right:12px;white-space:nowrap'>"
+            f"{re.sub(r'[A-Za-z][A-Za-z &;/]*[A-Za-z;]', serif, a)}</td>"
             f"<td style='color:{C['text']}'>{b}</td></tr>" for a, b in rows) + "</table>"
         self.label.setText(html)
         self.adjustSize()
@@ -10270,6 +10967,28 @@ class GrowText(QPlainTextEdit):
         super().resizeEvent(e)
         QTimer.singleShot(0, self._fit)    # re-wrap at the new width
 
+    red_caret = False
+
+    def use_red_caret(self):
+        """The page's input line: a seal-red caret instead of the text-coloured one."""
+        self.red_caret = True
+        self.setCursorWidth(0)
+        self.cursorPositionChanged.connect(self.viewport().update)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self.red_caret and self.hasFocus():     # ponytail: steady, no blink
+            r = self.cursorRect()
+            QPainter(self.viewport()).fillRect(QRect(r.left(), r.top(), 2, r.height()), QColor(C["accent"]))
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        self.viewport().update()
+
+    def focusOutEvent(self, e):
+        super().focusOutEvent(e)
+        self.viewport().update()
+
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key_Return, Qt.Key_Enter) and (not self.allow_newline
                                                           or not (e.modifiers() & Qt.ShiftModifier)):
@@ -10288,8 +11007,7 @@ class CopyButton(QAbstractButton):
     def __init__(self, parent=None, label=""):
         super().__init__(parent)
         self.label = label
-        extra = QFontMetrics(self.font()).horizontalAdvance(max(label, "Copied")) + 10 if label else 0
-        self.setFixedSize(self.W + extra, self.H)
+        self._fit()
         self.setCursor(Qt.PointingHandCursor)
         self._done = 0.0          # 0 = copy icon, >0 = tick (its pop-in scale)
         self._anim = QVariantAnimation(self)
@@ -10309,9 +11027,22 @@ class CopyButton(QAbstractButton):
         self._anim.stop()
         self._reset.stop()
         self._done = 0.0
-        extra = QFontMetrics(self.font()).horizontalAdvance(max(label, "Copied")) + 10 if label else 0
-        self.setFixedSize(self.W + extra, self.H)
+        self._fit()
         self.update()
+
+    def _link_font(self):
+        f = QFont(self.font())
+        f.setPixelSize(11)
+        f.setUnderline(True)
+        return f
+
+    def _fit(self):
+        """With a label it's an underlined link on the page (Copy all); without, the copy icon on a note's pill."""
+        if self.label:
+            fm = QFontMetrics(self._link_font())
+            self.setFixedSize(max(fm.horizontalAdvance(self.label), fm.horizontalAdvance("Copied")) + 6, self.H)
+        else:
+            self.setFixedSize(self.W, self.H)
 
     def _set_done(self, v):
         self._done = float(v)
@@ -10335,6 +11066,12 @@ class CopyButton(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         hover = self.underMouse()
+        if self.label:
+            p.setFont(self._link_font())
+            p.setPen(QColor(C["glimmer"] if self._done else C["accent_text"] if self.isDown()
+                            else C["text"] if hover else C["dim"]))
+            p.drawText(r, Qt.AlignVCenter | Qt.AlignRight, "Copied" if self._done else self.label)
+            return
         if self._done:
             bg, edge, ink = QColor(C["glimmer_bg"]), QColor(C["glimmer"]), QColor(C["glimmer"])
         elif self.isDown():
@@ -10443,31 +11180,16 @@ class RoundedWindow(QWidget):
 
 
 def paint_material(p, r, radius, shadow, border=None):
-    """The shared window look: a soft shadow that falls a little below (ambient plus a tight contact shadow), a
-    glow from the top left, a sheen that fades down the first third, a hairline edge and a lit top rim."""
-    dark = theme_dark()
+    """The shared window look: a flat page in the page colour on a soft shadow, with a 1 px edge."""
     paint_shadow(p, r, radius, shadow)
-    g = QRadialGradient(r.left() + r.width() * 0.2, r.top(), max(r.width(), r.height()) * 1.1)
-    g.setColorAt(0.0, QColor(C["glow"]))
-    g.setColorAt(1.0, QColor(C["bg"]))
-    p.setBrush(g)
+    p.setBrush(QColor(C["bg"]))
     p.drawRoundedRect(r, radius, radius)
-    sheen = QLinearGradient(r.topLeft(), QPointF(r.left(), r.top() + min(140.0, r.height() * 0.35)))
-    sheen.setColorAt(0.0, QColor(255, 255, 255, 9 if dark else 120))
-    sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
-    p.setBrush(sheen)
-    p.drawRoundedRect(r, radius, radius)
-    edge = QColor(border) if border is not None else veil(26 if dark else 40)
+    edge = QColor(border) if border is not None else veil(26 if theme_dark() else 40)
     if border is not None:
         edge.setAlpha(170)
     p.setBrush(Qt.NoBrush)
     p.setPen(QPen(edge, 1))
     p.drawRoundedRect(r, radius, radius)
-    rim = QLinearGradient(r.left() + radius, 0, r.right() - radius, 0)     # brightest mid-way, gone at the corners
-    for at, a in ((0.0, 0), (0.5, 26 if dark else 230), (1.0, 0)):
-        rim.setColorAt(at, QColor(255, 255, 255, a))
-    p.setPen(QPen(QBrush(rim), 1))
-    p.drawLine(QPointF(r.left() + radius, r.top() + 1.5), QPointF(r.right() - radius, r.top() + 1.5))
 
 
 def paint_shadow(p, r, radius, shadow, drop=4):
@@ -10484,31 +11206,17 @@ def paint_shadow(p, r, radius, shadow, drop=4):
 
 
 def paint_event_block(p, rect, color, past, radius, lift=0.0):
-    """A calendar event as a small raised tile in its own colour: a soft drop, a gentle top to bottom gradient and
-    a sheen across the top. Past events stay flat and faded. lift (0..1) brightens it while hovered."""
+    """A calendar event as a ruled entry on the page: a rule in its colour along its start and a pale wash of that
+    colour under it, text in page ink. Past events fade. lift (0..1) deepens the wash while hovered."""
     p.save()
     p.setPen(Qt.NoPen)
-    color = QColor(color)
-    if not past:
-        p.setBrush(QColor(0, 0, 0, 46 if theme_dark() else 24))
-        p.drawRoundedRect(rect.translated(0, 1.2), radius, radius)
-    top, bottom = color.lighter(110 + int(8 * lift)), color.lighter(100 + int(8 * lift))
-    for c in (top, bottom):
-        c.setAlpha(95 if past else 238)
-    g = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    g.setColorAt(0.0, top)
-    g.setColorAt(1.0, bottom)
-    p.setBrush(g)
-    p.drawRoundedRect(rect, radius, radius)
-    if not past:
-        clip = QPainterPath()
-        clip.addRoundedRect(rect, radius, radius)
-        p.setClipPath(clip, Qt.IntersectClip)
-        sheen = QLinearGradient(rect.topLeft(), QPointF(rect.left(), rect.top() + min(14.0, rect.height() * 0.6)))
-        sheen.setColorAt(0.0, QColor(255, 255, 255, 40 + int(22 * lift)))
-        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.setBrush(sheen)
-        p.drawRect(rect)
+    wash = QColor(color)
+    wash.setAlphaF((0.10 if past else 0.20) + 0.14 * lift)
+    p.setBrush(wash)
+    p.drawRoundedRect(rect, 2, 2)
+    rule = QColor(color)
+    rule.setAlphaF(0.45 if past else 1.0)
+    p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), 2), rule)
     p.restore()
 
 
@@ -10519,9 +11227,9 @@ def _blend(a, b, t):
                                                          (a.blue(), b.blue()))))
 
 
-def lit_top(bg):
-    """A touch lighter than bg, for the top of a gradient that ends at bg: cards look lit from above."""
-    return _blend(bg, "#ffffff", 0.06 if QColor(bg).lightness() < 128 else 0.55).name()
+def page_ink(t):
+    """Ink at density t on the page: 0 is the page, 1 is the text colour. Read at paint time, so it follows the theme."""
+    return _blend(C["bg"], C["text"], t)
 
 
 class Ease:
@@ -10991,6 +11699,7 @@ class Panel(RoundedWindow):
         store._timer.timeout.connect(self._prebuild)    # just after each save: cards are ready before the open
         self.focus_return = FocusReturn()
         self.setObjectName("roundwin")
+        self.setProperty("page", True)                 # the page look in STYLE (QWidget[page="true"] ...)
         self.setAttribute(Qt.WA_AlwaysShowToolTips)   # tooltips even when the list isn't the active window
         self.setWindowTitle(APP_NAME)
         self.setStyleSheet(full_style())
@@ -11030,6 +11739,8 @@ class Panel(RoundedWindow):
         self.title.setObjectName("appTitle")
         sub = SentenceLabel(APP_TAGLINE)
         sub.setObjectName("appSub")
+        self.mark = EnsoMark(6.5)
+        tabs_row.addWidget(self.mark, 0, Qt.AlignVCenter)
         tabs_row.addWidget(self.title, 1)
         # grouped: your notes (find, new list) | the focus session (music, block) | about (thoughts, help, settings) | close
         findb = self.findb = head_btn("search", "Search, filter and sort (Ctrl+F)", lambda: self.toggle_search())
@@ -11048,8 +11759,8 @@ class Panel(RoundedWindow):
             tabs_row.addSpacing(5 if i else 0)
             for w in group:
                 tabs_row.addWidget(w, 0, Qt.AlignTop)
-        self.title.ensurePolished()
-        self.title.setMinimumWidth(self.title.fontMetrics().horizontalAdvance(APP_NAME) + 16)
+        # the QSS font isn't applied until shown, so measure the serif title directly (italic overhangs: +16)
+        self.title.setMinimumWidth(QFontMetrics(serif_font(17)).horizontalAdvance(APP_NAME) + 16)
         v.addLayout(tabs_row)
         v.addWidget(sub)
         v.addSpacing(4)
@@ -11149,7 +11860,10 @@ class Panel(RoundedWindow):
         ib.addWidget(self.forgot_btn)
         ib.addStretch(1)
         tr.addWidget(self.idle_box, 1)
-        # running / overrun: label + up to 3 buttons
+        # running / overrun: label + up to 3 buttons; a small enso fills in as the round goes
+        self.timer_mark = EnsoMark(6.0)
+        self.timer_mark.hide()
+        tr.addWidget(self.timer_mark, 0, Qt.AlignVCenter)
         self.timer_label = QLabel()
         self.timer_label.setObjectName("timerChip")
         self.timer_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -11167,6 +11881,7 @@ class Panel(RoundedWindow):
 
         self.quick = GrowText(max_lines=6)   # wraps and grows; Enter parks, Shift+Enter starts a new line
         self.quick.setObjectName("quick")
+        self.quick.use_red_caret()
         self.quick.setPlaceholderText("Park a thought, then tag it below")
         self.quick.returnPressed.connect(self._quick_add)
         self.quick.installEventFilter(self)
@@ -11181,7 +11896,7 @@ class Panel(RoundedWindow):
         self.reminder_btn = reminder_chip(self, self._edit_quick_reminder)
         self.reminder_btn.setObjectName("remIcon")      # beside Park, not among the flags: it's a when, not a tag
         self.reminder_btn.setIconSize(QSize(16, 16))
-        self.send_btn = SendButton(self, self._quick_add, [self.quick])
+        self.send_btn = SendButton(self, self._quick_add, [self.quick], ink=True)
         qtop.addWidget(self.reminder_btn, 0, Qt.AlignBottom)
         qtop.addWidget(self.send_btn, 0, Qt.AlignBottom)
         qbox.addLayout(qtop)
@@ -11212,7 +11927,7 @@ class Panel(RoundedWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list = QWidget()
+        self.list = RuledPage()
         self.list.setObjectName("list")
         self.list_lay = QVBoxLayout(self.list)
         self.list_lay.setContentsMargins(0, 2, 2, 16)   # room for the last note's pill
@@ -11516,7 +12231,7 @@ class Panel(RoundedWindow):
                 box = QScrollArea()
                 box.setWidgetResizable(True)
                 box.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-                inner = QWidget()
+                inner = RuledPage()
                 inner.setObjectName("list")
                 il = QVBoxLayout(inner)
                 il.setContentsMargins(0, 0, 2, 16)
@@ -12352,11 +13067,15 @@ class Panel(RoundedWindow):
                 self.forgot_btn.setIcon(rewind_icon(C["dim"]))
             self.idle_box.show()
             self.timer_label.hide()
+            self.timer_mark.hide()
             for b in self.timer_btns:
                 b.hide()
             self.timer_row.show()
             return
         self.idle_box.hide()
+        self.timer_mark.setVisible(bool(tm.running))
+        self.timer_mark.upto, self.timer_mark.color = 1.0 - tm.progress(), color
+        self.timer_mark.update()
         self.timer_label.show()
         self.timer_label.setText(text)
         self.timer_label.setStyleSheet(f"color: {color};")
@@ -12977,6 +13696,7 @@ class QuickBox(RoundedWindow):
         self.focus_return = FocusReturn()
         self._warned = False
         self.setObjectName("roundwin")
+        self.setProperty("page", True)        # a paper slip: the list's ruled line, red caret and flag marks
         self.setStyleSheet(full_style())
         self.setFixedWidth(430 + 2 * self.SHADOW)
         lay = QVBoxLayout(self)
@@ -12985,6 +13705,7 @@ class QuickBox(RoundedWindow):
         lay.setSpacing(6)
         self.edit = GrowText(max_lines=6)       # Enter parks, Shift+Enter starts a new line
         self.edit.setObjectName("quick")
+        self.edit.use_red_caret()
         self.edit.grew.connect(lambda: self._regrow())
         self.edit.returnPressed.connect(self._save)
         self.edit.installEventFilter(self)
@@ -13032,7 +13753,7 @@ class QuickBox(RoundedWindow):
         self._flag_line.addWidget(self.reminder_btn)
         left.addWidget(self.details)
         self.details.hide()              # one box is enough for a stray thought (Shift+Enter for more lines)
-        self.send_btn = SendButton(self, self._save, [self.edit, self.details])
+        self.send_btn = SendButton(self, self._save, [self.edit, self.details], ink=True)
         right.addWidget(self.send_btn, 0, Qt.AlignBottom)
         lay.addWidget(self.hint)
         self.build_flags()
@@ -13371,27 +14092,14 @@ class ToggleSwitch(QAbstractButton):
         k = self._k
         track = QColor(int(off.red() + (on.red() - off.red()) * k), int(off.green() + (on.green() - off.green()) * k),
                        int(off.blue() + (on.blue() - off.blue()) * k))
-        top = _blend(track.darker(118), track.lighter(116), k)      # off: a slot pressed in; on: lit from above
         if not self.isEnabled():
             track.setAlpha(90)
-            top.setAlpha(90)
-        g = QLinearGradient(0, 2, 0, 20)
-        g.setColorAt(0.0, top)
-        g.setColorAt(0.6, track)
         p.setPen(Qt.NoPen)
-        p.setBrush(g)
+        p.setBrush(track)                                           # flat, like ink on the page
         p.drawRoundedRect(QRectF(1, 2, 38, 18), 9, 9)
         d = 12 + 1.2 * self.hover.v
         knob = QRectF(10 + 18 * k - d / 2, 11 - d / 2, d, d)
-        if self.isEnabled():
-            p.setBrush(QColor(0, 0, 0, 70))
-            p.drawEllipse(knob.translated(0, 1))
-            kg = QLinearGradient(0, knob.top(), 0, knob.bottom())
-            kg.setColorAt(0.0, QColor("#ffffff"))
-            kg.setColorAt(1.0, QColor("#e4e5e8"))
-            p.setBrush(kg)
-        else:
-            p.setBrush(QColor("#8a8a8a"))
+        p.setBrush(QColor("#fbfaf7" if self.isEnabled() else "#8a8a8a"))
         p.drawEllipse(knob)
         if self.hasFocus():
             p.setPen(QPen(QColor(C["text"]), 1))
@@ -13444,6 +14152,8 @@ class Swatch(QAbstractButton):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        if not self.isEnabled():           # e.g. colours while the enso (which follows the theme) is picked
+            p.setOpacity(0.35)
         if self.isChecked():
             p.setPen(QPen(QColor(C["text"]), 2))
             p.setBrush(Qt.NoBrush)
@@ -13457,16 +14167,9 @@ class Swatch(QAbstractButton):
 
 
 def paint_tile(p, r, picked, hover, radius):
-    """A pick card: a contact shadow, a fill lit from above (warmer when picked, lighter on hover) and an edge
-    that turns accent when picked."""
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(0, 0, 0, 50 if theme_dark() else 18))
-    p.drawRoundedRect(r.translated(0, 1.2), radius, radius)
-    base = QColor(C["accent_soft"]) if picked else _blend(C["field"], C["surface_hi"], hover)
-    g = QLinearGradient(r.topLeft(), r.bottomLeft())
-    g.setColorAt(0.0, QColor(lit_top(base.name())))
-    g.setColorAt(0.45, base)
-    p.setBrush(g)
+    """A pick card: flat paper with a hairline edge, a little darker on hover; the picked one is seal-washed
+    with a seal edge."""
+    p.setBrush(QColor(C["accent_soft"]) if picked else _blend(C["bg"], C["surface_hi"], hover))
     p.setPen(QPen(QColor(C["accent"]) if picked else _blend(C["border"], C["faint"], 0.5 * hover),
                   1.6 if picked else 1))
     p.drawRoundedRect(r, radius, radius)
@@ -13494,7 +14197,7 @@ class PreviewTile(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -2)
-        paint_tile(p, r, self.isChecked(), self.hover.v, 10)
+        paint_tile(p, r, self.isChecked(), self.hover.v, 6)
         if self.pix is not None and not self.pix.isNull():
             s = min(self.width() - 20, self.height() - 34)
             pm = self.pix.scaled(s, s, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -13532,7 +14235,7 @@ class ChoiceCard(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -2)
-        paint_tile(p, r, self.isChecked(), self.hover.v, 9)
+        paint_tile(p, r, self.isChecked(), self.hover.v, 6)
         if self.isChecked():            # a small accent tick in the corner
             c = QPointF(r.right() - 12, r.top() + 12)
             p.setPen(Qt.NoPen)
@@ -13579,7 +14282,7 @@ def bubble_preview(bubble, color=None, shape=None):
 def tour_looks(bubble):
     """Pictures of the real cloud for the tour's scenes: as it is, in a few shapes and colours, and the default."""
     b = bubble
-    return dict(cloud=bubble_preview(b), bubble=b, default=bubble_preview(b, "white", "cloud"),
+    return dict(cloud=bubble_preview(b), bubble=b, default=bubble_preview(b, shape="inkcloud"),
                 shapes=[(CIRCLE_SHAPES[s].split(" (")[0], bubble_preview(b, shape=s))
                         for s in ("circle", "squircle", "hexagon", "speech")],
                 colors=[(CIRCLE_COLORS[c][0], bubble_preview(b, color=c, shape="cloud"))
@@ -13638,7 +14341,7 @@ def _chip(p, rect, text, fg=None, bg=None, px=11, bold=False, opacity=1.0):
     p.restore()
 
 
-def _card(p, rect, fill=None, edge=None, radius=10):
+def _card(p, rect, fill=None, edge=None, radius=6):
     p.save()
     p.setPen(QPen(QColor(edge or C["border"]), 1))
     p.setBrush(QColor(fill or C["surface"]))
@@ -14490,7 +15193,7 @@ def paint_scene(p, rect, scene, t, k, end=SCENE_END):
     p.setRenderHint(QPainter.SmoothPixmapTransform)
     p.translate(rect.topLeft())
     p.scale(rect.width() / SCENE_W, rect.height() / SCENE_H)
-    _card(p, QRectF(0.5, 0.5, SCENE_W - 1, SCENE_H - 1), C["field"], radius=14)
+    _card(p, QRectF(0.5, 0.5, SCENE_W - 1, SCENE_H - 1), C["field"], radius=6)
     scene(p, min(max(t, 0.0), end), k)
     p.restore()
 
@@ -14563,7 +15266,8 @@ def tour_share(i):
 
 
 class TourSteps(QWidget):
-    """The chapter row (current in accent, done ones ticked) over a 3 px bar that eases to the slide's share."""
+    """The chapter row (current a seal-red dot, done ones ink, the rest faint rings) over a 1 px rule with a 2 px
+    seal-red line that eases to the slide's share."""
     jump = Signal(int)
 
     def __init__(self, parent=None):
@@ -14603,20 +15307,23 @@ class TourSteps(QWidget):
         for i, name in enumerate(TOUR_CHAPTERS):
             c = QPointF(self._x(i), y)
             now, done = i == self.chapter, i < self.chapter
+            ink = QColor(C["accent"]) if now else page_ink(.42) if done else QColor(C["faint"])
+            p.setPen(QPen(ink, 1.2))
+            p.setBrush(ink if now or done else QColor(C["bg"]))
+            p.drawEllipse(c, 5 if now else 4, 5 if now else 4)
             if now:
-                halo = QColor(C["accent"])
-                halo.setAlpha(70)
-                p.setPen(Qt.NoPen)
-                p.setBrush(halo)
-                p.drawEllipse(c, 10, 10)
-            p.setPen(QPen(QColor(C["accent"] if now or done else C["faint"]), 1.5))
-            p.setBrush(QColor(C["accent"] if now or done else C["bg"]))
-            p.drawEllipse(c, 6, 6)
-            if done:
-                _text(p, QRectF(c.x() - 6, c.y() - 6, 12, 12), "✓", 9, "#ffffff", Qt.AlignCenter, True)
-            _text(p, QRectF(c.x() - 50, y + 8, 100, 17), name, 12, C["text"] if now else C["dim"], Qt.AlignCenter, now)
-        p.fillRect(QRectF(0, self.height() - 3, self.width(), 3), QColor(C["border"]))
-        p.fillRect(QRectF(0, self.height() - 3, self.width() * self.share, 3), QColor(C["accent"]))
+                p.save()
+                f = QFont(SERIF)
+                f.setItalic(True)
+                f.setPixelSize(14)
+                p.setFont(f)
+                p.setPen(QColor(C["text"]))
+                p.drawText(QRectF(c.x() - 50, y + 7, 100, 19), Qt.AlignCenter, name)
+                p.restore()
+            else:
+                _text(p, QRectF(c.x() - 50, y + 8, 100, 17), name, 12, C["dim"], Qt.AlignCenter)
+        p.fillRect(QRectF(0, self.height() - 1, self.width(), 1), QColor(C["border"]))
+        p.fillRect(QRectF(0, self.height() - 2, self.width() * self.share, 2), QColor(C["accent"]))
 
     def mousePressEvent(self, e):
         self.jump.emit(min(len(TOUR_CHAPTERS) - 1, int(e.position().x() * len(TOUR_CHAPTERS) / max(1, self.width()))))
@@ -14728,7 +15435,7 @@ class Onboarding(RoundedWindow):
         self.compare = QWidget(text)
         cl = QHBoxLayout(self.compare)
         cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(8)
+        cl.setSpacing(16)
         self.worse = QLabel(self.compare)
         self.worse.setObjectName("obWorse")
         self.better = QLabel(self.compare)
@@ -14793,21 +15500,21 @@ class Onboarding(RoundedWindow):
 
     def _css(self):
         return full_style() + f"""
-            QLabel#obTitle {{ color: {C['text']}; font-size: 20px; font-weight: 700; }}
+            QLabel#obTitle {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 23px;
+                font-weight: 400; }}
             QLabel#obLine {{ color: {C['dim']}; font-size: 13px; }}
-            QLabel#obWorse {{ background: {C['field']}; color: {C['faint']}; font-size: 12px;
-                text-decoration: line-through; border: 1px solid {C['border']}; border-radius: 11px;
-                padding: 3px 10px; }}
-            QLabel#obBetter {{ background: {C['glimmer_bg']}; color: {C['glimmer']}; font-size: 12px;
-                font-weight: 700; border: 1px solid {C['glimmer_bg']}; border-radius: 11px; padding: 3px 10px; }}
+            QLabel#obWorse {{ background: transparent; color: {C['faint']}; font-size: 12px;
+                text-decoration: line-through; border: none; padding: 3px 0; }}
+            QLabel#obBetter {{ background: transparent; color: {C['glimmer']}; font-size: 12px;
+                font-weight: 600; border: none; padding: 3px 0; }}
             QLabel#obAside {{ color: {C['dim']}; font-size: 12px; }}
             QLabel#obCount, QLabel#obNote {{ color: {C['faint']}; font-size: 12px; }}
             QLabel#obAsk {{ color: {C['text']}; font-size: 12px; font-weight: 600; }}
             QLabel#obStatus {{ color: {C['dim']}; font-size: 12px; }}
             QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                padding: 6px 14px; border-radius: 8px; font-weight: 600; }}
-            QPushButton#primary:hover {{ background: #b54552; }}
-            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}"""
+                padding: 6px 14px; border-radius: 6px; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: {C['accent_hover']}; }}
+            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 6px; }}"""
 
     def _restyle(self):
         self.setStyleSheet(self._css())
@@ -14994,7 +15701,7 @@ class Spotlight(QWidget):
         k = self.pulse()
         color = QColor(C["accent"])
         color.setAlphaF(0.45 + 0.55 * k)
-        w = 2.5 + 1.5 * k
+        w = 1.5 + 1.0 * k
         r = QRectF(self.rect()).adjusted(w, w, -w, -w)
         p.setPen(QPen(color, w))
         p.setBrush(Qt.NoBrush)
@@ -15136,15 +15843,12 @@ class Coach(QObject):
 
 
 def make_settings_style():
-    dark = theme_dark()
-    rim = lit_top(C['border']) if dark else C['border']                      # top edge catches the light
-    floor = _blend(C['border'], "#000000", 0.28 if dark else 0.07).name()    # bottom edge sits in shadow
-    picked = _blend(C['accent_soft'], C['accent'], 0.3 if dark else 0.12).name()
+    """Settings as one page: paper all the way, Georgia italic headings, rows ruled like the list, flat controls."""
     return f"""
 QWidget#settingsRoot {{ background: {C['bg']}; }}
-QListWidget#side {{ background: {C['surface']}; border: none; border-right: 1px solid {C['border']};
-    color: {C['dim']}; font-size: 13px; outline: none; padding: 10px 6px; }}
-QListWidget#side::item {{ padding: 9px 10px 9px 8px; border-radius: 8px; margin: 1px 0;
+QListWidget#side {{ background: {C['bg']}; border: none; border-right: 1px solid {C['border']};
+    color: {C['dim']}; font-size: 13px; outline: none; padding: 10px 0; }}
+QListWidget#side::item {{ padding: 9px 10px 9px 12px; border-radius: 0; margin: 1px 0;
     border-left: 2px solid transparent; }}
 QListWidget#blockList {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 8px; outline: none; padding: 4px; font-size: 13px; }}
@@ -15153,22 +15857,23 @@ QListWidget#blockList::item:selected {{ background: {C['accent_soft']}; color: {
 QListWidget#blockList::indicator {{ width: 13px; height: 13px; border: 1px solid {C['dim']}; border-radius: 4px; }}
 QListWidget#blockList::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
 QListWidget#side::item:selected {{ color: {C['text']}; border-left: 2px solid {C['accent']};
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {picked}, stop:1 {C['accent_soft']}); }}
+    background: {C['surface_hi']}; }}
 QListWidget#side::item:hover:!selected {{ background: {C['surface_hi']}; color: {C['text']}; }}
 QScrollArea#page {{ background: {C['bg']}; border: none; }}
 QWidget#pageBody {{ background: {C['bg']}; }}
-QLabel#pageTitle {{ color: {C['text']}; font-size: 18px; font-weight: 700; }}
+QLabel#pageTitle {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 24px;
+    font-weight: 400; }}
 QLabel#pageSub {{ color: {C['faint']}; font-size: 12px; }}
-QLabel#section {{ color: {C['dim']}; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-top: 10px; }}
-QFrame#group {{ border: 1px solid {C['border']}; border-top-color: {rim}; border-bottom-color: {floor};
-    border-radius: 12px; background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {lit_top(C['surface'])},
-    stop:0.2 {C['surface']}, stop:1 {C['surface']}); }}
+QLabel#section {{ color: {C['dim']}; font-family: {SERIF}; font-style: italic; font-size: 15px; font-weight: 400;
+    padding-top: 14px; qproperty-indent: 0; }}
+QFrame#group {{ border: none; background: transparent; }}
+QLabel#statusLine {{ color: {C['glimmer']}; font-size: 13px; }}
 QLabel#rowTitle {{ color: {C['text']}; font-size: 13px; }}
 QLabel#rowDesc {{ color: {C['faint']}; font-size: 12px; }}
 QLabel#logLine {{ color: {C['dim']}; font-size: 12px; }}
 QLabel#story {{ color: {C['dim']}; font-size: 13px; padding: 6px 0; }}
-QToolButton#fold {{ color: {C['dim']}; font-size: 11px; font-weight: 700; text-align: left; border: none;
-    background: transparent; padding: 10px 0 2px 0; }}
+QToolButton#fold {{ color: {C['dim']}; font-family: {SERIF}; font-style: italic; font-size: 15px;
+    font-weight: 400; text-align: left; border: none; background: transparent; padding: 14px 0 2px 0; }}
 QToolButton#fold:hover, QToolButton#fold:focus {{ color: {C['text']}; }}
 QPushButton#logHead {{ color: {C['text']}; font-size: 13px; text-align: left; border: none; background: transparent;
     padding: 6px 0 2px 0; }}
@@ -15176,31 +15881,38 @@ QPushButton#logHead:hover, QPushButton#logHead:focus {{ color: {C['accent_text']
 QLabel#value {{ color: {C['dim']}; font-size: 12px; min-width: 38px; }}
 QKeySequenceEdit, QLineEdit {{ background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']};
     border-radius: 6px; padding: 3px 6px; }}
-QPushButton#seg {{ color: {C['dim']}; border: 1px solid {C['border']}; border-bottom-color: {floor}; border-radius: 0;
-    padding: 5px 13px; font-size: 12px; background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-    stop:0 {lit_top(C['field'])}, stop:1 {C['field']}); }}
-QPushButton#seg[pos="first"] {{ border-top-left-radius: 8px; border-bottom-left-radius: 8px; }}
-QPushButton#seg[pos="last"] {{ border-top-right-radius: 8px; border-bottom-right-radius: 8px; }}
-QPushButton#seg:checked {{ color: white; border-color: {C['accent']};
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['accent_hover']}, stop:1 {C['accent']}); }}
+QPushButton#seg {{ color: {C['dim']}; border: 1px solid {C['border']}; border-radius: 0;
+    padding: 5px 13px; font-size: 12px; background: transparent; }}
+QPushButton#seg[pos="first"] {{ border-top-left-radius: 6px; border-bottom-left-radius: 6px; }}
+QPushButton#seg[pos="last"] {{ border-top-right-radius: 6px; border-bottom-right-radius: 6px; }}
+QPushButton#seg:checked {{ color: white; border-color: {C['accent']}; background: {C['accent']}; }}
 QPushButton#seg:hover:!checked {{ background: {C['surface_hi']}; color: {C['text']}; }}
-QPushButton#act {{ color: {C['text']}; border: 1px solid {C['border']}; border-top-color: {rim};
-    border-bottom-color: {floor}; border-radius: 8px; padding: 5px 12px; font-size: 12px;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {lit_top(C['surface_hi'])}, stop:1 {C['surface_hi']}); }}
-QPushButton#act:hover {{ border-color: {C['accent']}; }}
+QPushButton#act {{ color: {C['text']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 12px;
+    font-size: 12px; background: transparent; }}
+QPushButton#act:hover {{ border-color: {C['accent']}; color: {C['accent_text']}; }}
 QPushButton#act:pressed {{ background: {C['surface_hi']}; }}
 QPushButton#act:disabled {{ color: {C['border']}; border-color: {C['surface_hi']}; }}
 QSlider::groove:horizontal {{ height: 4px; background: {C['border']}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ border-radius: 2px;
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {C['accent']}, stop:1 {C['accent_hover']}); }}
-QSlider::handle:horizontal {{ border: 1px solid {floor}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #e2e3e6); }}
-QSlider::handle:horizontal:hover, QSlider::handle:horizontal:focus {{ border-color: {C['accent']}; }}
-QSlider::handle:horizontal:pressed {{ background: #f1f1f3; }}
+QSlider::sub-page:horizontal {{ border-radius: 2px; background: {C['accent']}; }}
+QSlider::handle:horizontal {{ border: 2px solid {C['accent']}; width: 10px; height: 10px; margin: -5px 0;
+    border-radius: 7px; background: {C['bg']}; }}
+QSlider::handle:horizontal:hover, QSlider::handle:horizontal:focus {{ background: {C['accent_soft']}; }}
+QSlider::handle:horizontal:pressed {{ background: {C['accent']}; }}
 """
 
 
 SETTINGS_STYLE = make_settings_style()
+
+
+class RuledGroup(QFrame):
+    """A settings group with no box: a faint rule between its rows, like lines on the list's page."""
+
+    def paintEvent(self, e):
+        lay = self.layout()
+        rows = [it.geometry() for it in (lay.itemAt(i) for i in range(lay.count())) if not it.isEmpty()]
+        p = QPainter(self)
+        for a, b in zip(rows, rows[1:]):
+            p.fillRect(QRect(0, (a.bottom() + 1 + b.top()) // 2, self.width(), 1), QColor(C["border"]))
 
 
 class NoWheelSlider(QSlider):
@@ -16773,10 +17485,7 @@ class MeetingNotice(QWidget):
             tail.lineTo(r.left() + 1, cy + 7)
         edge = QColor(self.accent)
         edge.setAlpha(110)
-        lit = QLinearGradient(r.topLeft(), r.bottomLeft())
-        lit.setColorAt(0.0, QColor(lit_top(C["surface_hi"])))
-        lit.setColorAt(1.0, QColor(C["surface_hi"]))
-        p.setBrush(lit)
+        p.setBrush(QColor(C["bg"]))
         p.setPen(QPen(edge, 1))
         p.drawPath(path.united(tail))
 
@@ -17009,7 +17718,7 @@ class EventDetails(QFrame):
                 color: white; border-radius: 9px; padding: 7px 16px 7px 12px; font-weight: 700; }}
             QPushButton#evSave {{ padding: 6px 16px; }}
             QPushButton#evJoin:hover, QPushButton#evJoin:focus, QPushButton#evSave:hover,
-                QPushButton#evSave:focus {{ background: #b54552; border-color: #b54552; }}
+                QPushButton#evSave:focus {{ background: {C['accent_hover']}; border-color: {C['accent_hover']}; }}
             QPushButton#evCancel {{ background: transparent; border: 1px solid {C['border']}; color: {C['text']};
                 border-radius: 9px; padding: 6px 14px; }}
             QPushButton#evCancel:hover, QPushButton#evCancel:focus {{ background: {C['surface']}; }}""")
@@ -17611,10 +18320,8 @@ class AgendaGrid(QWidget):
                     ring.setAlpha(int(150 * lift))
                 p.setBrush(Qt.NoBrush)
                 p.setPen(QPen(ring, 1.6 if n == self.selected else 1.2))
-                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
-            ink = QColor(C["text"]) if past else ink_for(color)
-            if past:
-                ink.setAlpha(170)
+                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2)
+            ink = QColor(C["dim"] if past else C["text"])
             pill = self.join_rect(rect, e)
             room = pill.width() + 3 if pill else 0
             p.save()
@@ -17633,34 +18340,21 @@ class AgendaGrid(QWidget):
             else:
                 p.drawText(text, Qt.AlignLeft | Qt.AlignVCenter, f"{e['title']}, {time_text}")
             p.restore()
-            if pill:
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(0, 0, 0, 40))
-                p.drawRoundedRect(pill.translated(0, 0.8), 7, 7)
-                p.setBrush(QColor(255, 255, 255, 240))
-                p.drawRoundedRect(pill, 7, 7)
+            if pill:                         # a seal-red link, like Copy all
                 tag = QFont(small)
-                tag.setPixelSize(10)
+                tag.setPixelSize(11)
                 tag.setWeight(QFont.Bold)
+                tag.setUnderline(True)
                 p.setFont(tag)
-                p.setPen(QColor("#1b1f24"))
+                p.setPen(QColor(C["accent_text"]))
                 p.drawText(pill, Qt.AlignCenter, "Join")
                 p.setFont(small)
         if today in self.days:
             col = self.col_rect(self.days.index(today))
             y = self.hour_y(self.now.hour + self.now.minute / 60)
-            red = QColor("#ea4335")
-            glow = QColor(red)
-            glow.setAlpha(50)
-            p.setPen(QPen(glow, 5, Qt.SolidLine, Qt.RoundCap))
-            p.drawLine(QPointF(col.x(), y), QPointF(col.right() - 2, y))
-            p.setPen(QPen(red, 2))
-            p.drawLine(QPointF(col.x(), y), QPointF(col.right() - 2, y))
-            p.setPen(Qt.NoPen)
-            p.setBrush(glow)
-            p.drawEllipse(QPointF(col.x(), y), 8, 8)
-            p.setBrush(red)
-            p.drawEllipse(QPointF(col.x(), y), 5, 5)
+            seal = QColor(C["accent"])          # now: a seal-red rule, with a short tick in the margin
+            p.fillRect(QRectF(col.x(), y - 0.75, col.width() - 2, 1.5), seal)
+            p.fillRect(QRectF(col.x() - 1, y - 4, 2.5, 8), seal)
         if dragging:
             start, end = self.drag_range()
             column, block = self.drag_column(), self.drag["rect"]
@@ -17932,7 +18626,7 @@ class AgendaGrid(QWidget):
 
 
 class AgendaDays(QWidget):
-    """The day strip above the grid: weekday and date for each column, today in a filled circle, and under them
+    """The day strip above the grid: weekday (Georgia italic) and date for each column, today's date underlined in seal red, and under them
     that day's all-day events as chips (three rows at most, the last one "+N more"). Click or right-click a chip
     for its details and actions. Tab picks a chip, Enter shows it."""
 
@@ -18069,33 +18763,20 @@ class AgendaDays(QWidget):
             col = self.grid.col_rect(index).translated(offset, 0)
             is_today = day == today
             past = day < today
-            week = QFont(self.font())
-            week.setPixelSize(11)
-            week.setWeight(QFont.DemiBold)
-            p.setFont(week)
-            p.setPen(QColor(C["accent"] if is_today else C["faint"] if past else C["dim"]))
-            p.drawText(QRectF(col.x(), 2, col.width(), 14), Qt.AlignCenter, day.strftime("%a").upper())
-            circle = QRectF(col.center().x() - 15, 18, 30, 30)
-            if is_today:
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(0, 0, 0, 50 if theme_dark() else 26))
-                p.drawEllipse(circle.translated(0, 1.2))
-                lit = QLinearGradient(circle.topLeft(), circle.bottomLeft())
-                lit.setColorAt(0.0, QColor(C["accent_hover"]))
-                lit.setColorAt(1.0, QColor(C["accent"]))
-                p.setBrush(lit)
-                p.drawEllipse(circle)
-                sheen = QLinearGradient(circle.topLeft(), QPointF(circle.left(), circle.center().y()))
-                sheen.setColorAt(0.0, QColor(255, 255, 255, 46))
-                sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
-                p.setBrush(sheen)
-                p.drawEllipse(circle.adjusted(1, 1, -1, -1))
+            ink = QColor(C["accent_text"] if is_today else C["faint"] if past else C["dim"])
+            p.setFont(serif_font(14))
+            p.setPen(ink)
+            p.drawText(QRectF(col.x() + 6, 2, col.width() - 8, 18), Qt.AlignLeft | Qt.AlignVCenter, day.strftime("%a"))
             number = QFont(self.font())
             number.setPixelSize(17)
             number.setWeight(QFont.DemiBold if is_today else QFont.Normal)
             p.setFont(number)
-            p.setPen(QColor("white" if is_today else C["faint"] if past else C["text"]))
-            p.drawText(circle, Qt.AlignCenter, str(day.day))
+            p.setPen(QColor(C["accent_text"] if is_today else C["faint"] if past else C["text"]))
+            date = QRectF(col.x() + 6, 19, col.width() - 8, 24)
+            p.drawText(date, Qt.AlignLeft | Qt.AlignVCenter, str(day.day))
+            if is_today:                        # the seal under today's date
+                p.fillRect(QRectF(date.left(), 44, QFontMetrics(number).horizontalAdvance(str(day.day)), 2),
+                           QColor(C["accent"]))
         chip_font = QFont(self.font())
         chip_font.setPixelSize(11)
         chip_font.setWeight(QFont.DemiBold)
@@ -18108,13 +18789,13 @@ class AgendaDays(QWidget):
                 color = QColor(event_color(e))
                 past = e["end"] <= self.grid.now
                 paint_event_block(p, rect, color, past, 5)
-                p.setPen(QColor(C["text"]) if past else ink_for(color))
-                p.drawText(rect.adjusted(6, 0, -4, 0).toRect(), Qt.AlignLeft | Qt.AlignVCenter,
+                p.setPen(QColor(C["dim"] if past else C["text"]))
+                p.drawText(rect.adjusted(6, 1, -4, 0).toRect(), Qt.AlignLeft | Qt.AlignVCenter,
                            p.fontMetrics().elidedText(e["title"], Qt.ElideRight, int(rect.width() - 10)))
             if n == self.selected and self.hasFocus():
                 p.setBrush(Qt.NoBrush)
                 p.setPen(QPen(QColor(C["text"]), 1.4))
-                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+                p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2)
         p.setPen(QPen(QColor(C["border"]), 1))
         p.drawLine(QPointF(0, self.height() - 0.5), QPointF(self.width(), self.height() - 0.5))
         p.end()
@@ -18131,16 +18812,17 @@ class EventDialog(QDialog):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(full_style() + f"""
-            QFrame#askInner {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 12px; }}
+            QFrame#askInner {{ background: {C['bg']}; border: 1px solid {C['border']}; border-radius: 8px; }}
+            QLabel#askHead {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 17px; }}
             QLineEdit#evNew {{ font-size: 16px; font-weight: 700; padding: 6px 8px; }}
             QLabel#askDim {{ color: {C['dim']}; font-size: 12px; }}
             QComboBox {{ padding: 5px 24px 5px 8px; }}
             QPushButton#askOk {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                border-radius: 8px; padding: 6px 18px; font-weight: 700; }}
-            QPushButton#askOk:hover {{ background: #b54552; }}
-            QToolButton#askClose {{ background: transparent; border: none; border-radius: 13px; padding: 4px;
+                border-radius: 6px; padding: 6px 18px; font-weight: 700; }}
+            QPushButton#askOk:hover {{ background: {C['accent_hover']}; }}
+            QToolButton#askClose {{ background: transparent; border: none; border-radius: 6px; padding: 4px;
                 min-width: 0; min-height: 0; }}
-            QToolButton#askClose:hover, QToolButton#askClose:focus {{ background: {C['surface']}; }}""")
+            QToolButton#askClose:hover, QToolButton#askClose:focus {{ background: {C['surface_hi']}; }}""")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         inner = QFrame(self)
@@ -18151,7 +18833,7 @@ class EventDialog(QDialog):
         v.setSpacing(8)
         head = QHBoxLayout()
         heading = QLabel("New event", inner)
-        heading.setObjectName("askDim")
+        heading.setObjectName("askHead")
         head.addWidget(heading)
         head.addStretch(1)
         self.close_btn = QToolButton(inner)
@@ -18429,11 +19111,10 @@ class CalendarAgenda(QWidget):
 
     def apply_background(self):
         bg = meeting_bar_background(self.calendar.store.settings)
-        rim = lit_top(C["border"]) if QColor(bg).lightness() < 128 else C["border"]
         self.card.setStyleSheet(
-            f"QFrame#agendaCard {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {lit_top(bg)},"
-            f" stop:0.12 {bg}, stop:1 {bg}); border: 1px solid {C['border']}; border-top-color: {rim}; border-radius: 14px; }}"
-            f"QLabel#agendaRange {{ color: {C['text']}; font-size: 14px; font-weight: 700; padding-left: 6px; }}"
+            f"QFrame#agendaCard {{ background: {bg}; border: 1px solid {C['border']}; border-radius: 14px; }}"
+            f"QLabel#agendaRange {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 17px;"
+            " font-weight: 400; padding-left: 6px; }"
             f"QLabel#agendaLoading {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid"
             f" {C['border']}; border-radius: 12px; padding: 5px 14px; font-size: 12px; }}"
             f"QToolButton {{ color: {C['text']}; background: transparent; border: none; border-radius: 7px;"
@@ -19025,11 +19706,13 @@ def rounded_frame(image, size, dpr=1.0, radius=12, fill=True, flip=False):
 
 
 def camera_style():
-    """The camera check and the timelapse: the app style plus their cards, round buttons and slider."""
+    """The camera check and the timelapse: the app style plus their cards, round buttons and slider. The frame is a
+    page (page colour, Georgia italic heading, ruled card, 6 px corners); the picture itself is left alone."""
     hover = QColor(C["accent"]).lighter(115).name()
     return full_style() + f"""
-QWidget#mirrorRoot {{ background: {C['surface']}; }}
-QLabel#mirrorHeading {{ color: {C['text']}; font-size: 16px; font-weight: 700; }}
+QWidget#mirrorRoot {{ background: {C['bg']}; }}
+QLabel#mirrorHeading {{ color: {C['text']}; font-family: {SERIF}; font-style: italic; font-size: 19px;
+    font-weight: 400; }}
 QLabel#mirrorBlurb, QLabel#mirrorStatus, QLabel#mirrorDb, QLabel#timelapseHint {{ color: {C['dim']}; font-size: 12px; }}
 QLabel#mirrorCaption {{ color: {C['dim']}; font-size: 12px; }}
 QToolButton#mirrorPill::menu-indicator {{ image: none; width: 0; }}
@@ -19042,10 +19725,11 @@ QCalendarWidget QAbstractItemView:disabled {{ color: {C['disabled']}; }}
 QLabel#mirrorTips {{ color: white; background: rgba(20, 20, 22, 215); border-radius: 10px; padding: 10px 12px;
     font-size: 12px; }}
 QLabel#timelapseInfo {{ color: {C['text']}; font-size: 12px; font-weight: 600; }}
-QLabel#mirrorPrivate {{ color: {C['dim']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
-    border-radius: 11px; padding: 2px 10px; font-size: 11px; font-weight: 600; }}
-QLabel#mirrorView {{ background: #111; color: {C['dim']}; border-radius: 12px; }}
-QFrame#mirrorCard {{ background: {C['field']}; border: 1px solid {C['border']}; border-radius: 10px; }}
+QLabel#mirrorPrivate {{ color: {C['dim']}; background: transparent; border: 1px solid {C['border']};
+    border-radius: 6px; padding: 2px 8px; font-size: 11px; }}
+QLabel#mirrorView {{ background: #111; color: {C['dim']}; border-radius: 12px; }}     /* matches rounded_frame() */
+QFrame#mirrorCard {{ background: transparent; border: none; border-top: 1px solid {C['border']};
+    border-bottom: 1px solid {C['border']}; border-radius: 0; }}
 QFrame#mirrorSwitches {{ background: rgba(20, 20, 22, 140); border-radius: 9px; }}
 QLabel#mirrorSwitchName {{ color: {C['text']}; font-size: 12px; }}
 QFrame#mirrorSwitches QLabel {{ color: rgba(255, 255, 255, 200); font-size: 11px; }}
@@ -19057,8 +19741,8 @@ QToolButton#mirrorPick::menu-indicator {{ image: none; width: 0; }}
 QToolButton#mirrorTool {{ color: {C['dim']}; font-size: 12px; border-radius: 8px; padding: 5px 2px 4px 2px;
     min-width: 0; min-height: 0; }}
 QToolButton#mirrorTool:hover {{ color: {C['text']}; background: {C['surface_hi']}; }}
-QToolButton#mirrorPill {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
-    border-radius: 13px; padding: 3px 10px; font-size: 12px; min-width: 0; min-height: 0; }}
+QToolButton#mirrorPill {{ color: {C['text']}; background: transparent; border: 1px solid {C['border']};
+    border-radius: 6px; padding: 3px 10px; font-size: 12px; min-width: 0; min-height: 0; }}
 QToolButton#mirrorPill:hover {{ color: {C['text']}; background: {C['surface_hi']}; border-color: {C['faint']}; }}
 QToolButton#mirrorPill:checked {{ color: {C['glimmer']}; background: {C['glimmer_bg']}; border-color: {C['glimmer']}; }}
 QToolButton#mirrorPill:disabled {{ color: {C['disabled']}; background: transparent; }}
@@ -19069,12 +19753,12 @@ QToolButton#timelapsePlay {{ background: {C['accent']}; border: none; border-rad
     min-width: 48px; min-height: 48px; max-width: 48px; max-height: 48px; }}
 QToolButton#timelapsePlay:hover {{ background: {hover}; }}
 QToolButton#timelapsePlay:disabled, QToolButton#timelapseRound:disabled {{ background: {C['surface_hi']}; }}
-QPushButton#mirrorPrimary {{ background: {C['accent']}; color: white; border: none; border-radius: 8px;
+QPushButton#mirrorPrimary {{ background: {C['accent']}; color: white; border: none; border-radius: 6px;
     padding: 7px 14px; font-weight: 600; }}
 QPushButton#mirrorPrimary:hover {{ background: {hover}; }}
 QPushButton#mirrorPrimary:disabled {{ background: {C['surface_hi']}; color: {C['disabled']}; }}
 QPushButton#mirrorGhost {{ background: transparent; color: {C['text']}; border: 1px solid {C['border']};
-    border-radius: 8px; padding: 7px 14px; }}
+    border-radius: 6px; padding: 7px 14px; }}
 QPushButton#mirrorGhost:hover {{ background: {C['surface_hi']}; }}
 QSlider::groove:horizontal {{ height: 4px; background: {C['border']}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {C['accent_text']}; border-radius: 2px; }}
@@ -20640,6 +21324,10 @@ class MeetingBadge(QWidget):
         self.source_color.setFixedSize(4, 30)
         self.source_color.setAttribute(Qt.WA_TransparentForMouseEvents)
         row.addWidget(self.source_color, 0, Qt.AlignVCenter)
+        self.enso = EnsoMark(8, inner)      # counts down: fills over the last hour, empties while the event runs
+        self.enso.hide()
+        self.countdown = None
+        row.addWidget(self.enso, 0, Qt.AlignVCenter)
         labels = QVBoxLayout()
         labels.setSpacing(0)
         self.title = QLabel(inner)
@@ -20715,18 +21403,15 @@ class MeetingBadge(QWidget):
     def apply_background(self):
         bg = meeting_bar_background(self.calendar.store.settings)
         text, dim = self._inks()
-        rim = lit_top(C["border"]) if QColor(bg).lightness() < 128 else C["border"]
-        self.setStyleSheet(f"QFrame#meetingInner {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                           f"stop:0 {lit_top(bg)}, stop:1 {bg}); border: 1px solid {C['border']}; "
-                           f"border-top-color: {rim}; border-radius: 12px; }} QLabel#meetingTitle {{ color: {text}; "
+        self.setStyleSheet(f"QFrame#meetingInner {{ background: {bg}; border: 1px solid {C['border']}; "
+                           f"border-radius: 12px; }} QLabel#meetingTitle {{ color: {text}; "
                            f"font-size: 13px; font-weight: 700; }} QLabel#meetingTime {{ color: {dim}; "
-                           f"font-size: 13px; }} QToolButton#meetingJoin {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                           f"stop:0 {C['accent_hover']}, stop:1 {C['accent']}); color: white; "
+                           f"font-size: 13px; }} QToolButton#meetingJoin {{ background: {C['accent']}; color: white; "
                            "border: 1px solid transparent; border-radius: 7px; font-size: 11px; font-weight: 700; padding: 0 3px; } "
                            f"QToolButton#meetingJoin:hover, QToolButton#meetingJoin:focus {{ background: {C['accent_hover']}; "
                            "border: 1px solid white; } "
-                           f"QToolButton#meetingMirror, QToolButton#meetingAdd {{ background: rgba(128, 128, 128, 30); "
-                           f"border: 1px solid {C['border']}; border-radius: 7px; padding: 0; }} "
+                           f"QToolButton#meetingMirror, QToolButton#meetingAdd {{ background: transparent; "
+                           f"border: 1px solid transparent; border-radius: 7px; padding: 0; }} "
                            f"QToolButton#meetingMirror:hover, QToolButton#meetingMirror:focus, "
                            f"QToolButton#meetingAdd:hover, QToolButton#meetingAdd:focus {{ "
                            f"background: {C['surface_hi']}; border: 1px solid {C['accent']}; }} "
@@ -20934,7 +21619,8 @@ class MeetingBadge(QWidget):
 
     def _buttons_width(self):
         if self._join_layout:
-            return self.mirror_btn.width() + self.buttons.horizontalSpacing() + self.add_btn.width()
+            return max(self.mirror_btn.width() + self.buttons.horizontalSpacing() + self.add_btn.width(),
+                       self.join_btn.minimumWidth())        # Join can be the wider one
         return max(self.mirror_btn.width(), self.add_btn.width())
 
     def _buttons_left(self):
@@ -21192,6 +21878,9 @@ class MeetingBadge(QWidget):
         self.row.setSpacing(2 if tiny else 3 if compact else 6)
         self.source_color.setFixedSize(3 if compact else 4,
                                        min(34, max(18, self.height() - (8 if compact else 14))))
+        self.enso.r = 6.0 if compact else 8.0
+        self.enso.setFixedSize(int(2 * self.enso.r + 6), int(2 * self.enso.r + 6))
+        self.enso.setVisible(self.countdown is not None and not tiny)      # no room on the smallest bar
         m = self.row.contentsMargins()
         side = max(12, min(22, (self.height() - m.top() - m.bottom() - self.buttons.spacing()) // 2))  # two stacked
         font_size = 11 if tiny else 12 if compact else 13
@@ -21217,8 +21906,8 @@ class MeetingBadge(QWidget):
             return
         self._stripe_color = key
         if len(tones) == 1:
-            t = tones[0]
-            stops = f"stop:0 {t.lighter(125).name()}, stop:0.5 {t.name()}, stop:1 {t.darker(120).name()}"
+            self.source_color.setStyleSheet(f"QFrame {{ background: {tones[0].name()}; border-radius: 1px; }}")
+            return
         else:
             n = len(tones)
             stops = ", ".join(f"stop:{i / n:.3f} {t.name()}, stop:{(i + 1) / n - 0.001:.3f} {t.name()}"
@@ -21228,7 +21917,8 @@ class MeetingBadge(QWidget):
 
     def _update_title(self):
         margins = self.row.contentsMargins()
-        width = max(1, self.width() - margins.left() - margins.right() - self.source_color.width() -
+        enso = self.enso.width() + self.row.spacing() if self.enso.isVisibleTo(self) else 0
+        width = max(1, self.width() - margins.left() - margins.right() - self.source_color.width() - enso -
                     self._buttons_width() - 2 * self.row.spacing() - 2)
         title = (self.current_event["title"] if self.current_event else
                  "Checking calendar..." if self.calendar.busy else
@@ -21344,6 +22034,10 @@ class MeetingBadge(QWidget):
         if self.current_event:
             e = self.current_event
             self._set_stripe(*(event_color(x) for x in [e] + self.overlaps[:3]))
+            self.countdown = meeting_countdown(e, now)
+            if self.countdown is not None:
+                self.enso.upto, self.enso.color = self.countdown, event_color(e)
+                self.enso.update()
             minutes = math.ceil((e["start"] - now).total_seconds() / 60)
             if e.get("all_day"):
                 day = f"{e['start']:%a %b} {e['start'].day}"
@@ -21362,6 +22056,7 @@ class MeetingBadge(QWidget):
             joinable = self.join_event is not None   # this one's call, else the call of one at the same time
             self._arrange_buttons(joinable)
             self.join_btn.setVisible(joinable)
+            self.enso.setVisible(self.countdown is not None and self.width() >= 160 and self.height() >= 38)
             if joinable:
                 provider = call_provider(self.join_event["url"])
                 self.join_btn.setToolTip(f"Join {self.join_event['title']}" + (f" on {provider}" if provider else ""))
@@ -21379,10 +22074,12 @@ class MeetingBadge(QWidget):
             self.glint.set_active(urgent or preview, meeting_glint_style(self.calendar.store.settings))
         else:
             self._set_stripe(C["dim"])
+            self.countdown = None
             self.join_event = None
             self._detail_text = "Loading next event" if self.calendar.busy else "Calendar is clear for now"
             self._arrange_buttons(False)
             self.join_btn.hide()
+            self.enso.hide()
             self._update_title()
             self.setToolTip("No timed events in the next 14 days.\nClick to open your 3 day calendar. "
                             "Drag to move the bar.")
@@ -21402,7 +22099,8 @@ class MeetingBadge(QWidget):
 
 class UsageHeat(QWidget):
     """Your days as a grid, one column a week (Monday on top), as many weeks as fit, today at the right. Shaded by
-    focus minutes (quartiles of your own days); a day with only parked thoughts gets the lightest shade. Hover a
+    focus minutes (quartiles of your own days) in ink density, not colour; a day with only parked thoughts gets the
+    lightest shade, today a seal-red ring. Hover a
     day for its numbers. Colours are read at paint time, so a theme switch recolours it. Cells grow (up to 24 px)
     when your history is short, so a new user's grid isn't mostly empty."""
     TOP, LEFT = 16, 28
@@ -21449,7 +22147,7 @@ class UsageHeat(QWidget):
         return 2 + sum(m > c for c in self.cuts)
 
     def shades(self):
-        return [QColor(C["surface_hi"])] + [_blend(C["surface_hi"], C["accent_text"], t) for t in (.22, .42, .6, .8, 1)]
+        return [page_ink(t) for t in (.07, .2, .36, .54, .74, .92)]
 
     def day_at(self, pos):
         w, k = int((pos.x() - self.LEFT) // self.CELL), int((pos.y() - self.TOP) // self.CELL)
@@ -21478,8 +22176,7 @@ class UsageHeat(QWidget):
         for k, name in ((0, "Mon"), (2, "Wed"), (4, "Fri"), (6, "Sun")):
             p.drawText(QRectF(0, top + k * cell, left - 6, cell), Qt.AlignRight | Qt.AlignVCenter, name)
         shades, start, month, weeks = self.shades(), self.start(), None, self.weeks()
-        first, before = self.st["first"] or today, QColor(shades[0])
-        before.setAlphaF(0.35)                      # days before you started: barely there
+        first, before = self.st["first"] or today, page_ink(.03)          # days before you started: barely there
         for w in range(weeks):
             monday = start + timedelta(days=7 * w)
             if monday.month != month and left + w * cell + 22 <= self.width():
@@ -21490,22 +22187,22 @@ class UsageHeat(QWidget):
                 d = monday + timedelta(days=k)
                 if d > today:
                     break
-                p.setPen(QPen(QColor(C["text"]), 1.2) if d == today else Qt.NoPen)
+                p.setPen(QPen(QColor(C["accent"]), 1.6) if d == today else Qt.NoPen)
                 p.setBrush(shades[self.level(d)] if d >= first else before)
-                p.drawRoundedRect(QRectF(left + w * cell + 1.5, top + k * cell + 1.5, cell - 3, cell - 3), 3, 3)
+                p.drawRoundedRect(QRectF(left + w * cell + 1.5, top + k * cell + 1.5, cell - 3, cell - 3), 2, 2)
         y, x = top + 7 * cell + 6, left + weeks * cell - 5 * 13 - 40
         p.setPen(QColor(C["faint"]))
         p.drawText(QRectF(x - 40, y, 36, 12), Qt.AlignRight | Qt.AlignVCenter, "Less")
         p.setPen(Qt.NoPen)
         for i, c in enumerate(shades[1:]):
             p.setBrush(c)
-            p.drawRoundedRect(QRectF(x + i * 13, y + 1, 10, 10), 3, 3)
+            p.drawRoundedRect(QRectF(x + i * 13, y + 1, 10, 10), 2, 2)
         p.setPen(QColor(C["faint"]))
         p.drawText(QRectF(x + 5 * 13 + 2, y, 36, 12), Qt.AlignLeft | Qt.AlignVCenter, "More")
 
 
 class UsageBars(QWidget):
-    """Vertical bars with a few labels underneath; the tallest in the accent, the rest softer. Hover for numbers."""
+    """Vertical bars with a few labels underneath, in ink; the tallest in seal red. Hover for numbers."""
 
     def __init__(self, values, labels, tips, parent=None, height=96):
         super().__init__(parent)
@@ -21533,12 +22230,12 @@ class UsageBars(QWidget):
         for i, val in enumerate(self.values):
             x = i * slot + gap / 2
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(C["surface_hi"]))
-            p.drawRoundedRect(QRectF(x, 0, slot - gap, h), 3, 3)
+            p.setBrush(page_ink(.06))
+            p.drawRoundedRect(QRectF(x, 0, slot - gap, h), 2, 2)
             if val and top:
                 bh = max(3.0, h * val / top)
-                p.setBrush(QColor(C["accent_text"]) if val == top else _blend(C["surface_hi"], C["accent_text"], .55))
-                p.drawRoundedRect(QRectF(x, h - bh, slot - gap, bh), 3, 3)
+                p.setBrush(QColor(C["accent"]) if val == top else page_ink(.42))
+                p.drawRoundedRect(QRectF(x, h - bh, slot - gap, bh), 2, 2)
             if self.labels[i]:
                 p.setPen(QColor(C["faint"]))
                 p.drawText(QRectF(x - 10, h + 2, slot - gap + 20, 14), Qt.AlignHCenter | Qt.AlignVCenter, self.labels[i])
@@ -21570,7 +22267,7 @@ class UsageStack(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         clip = QPainterPath()
-        clip.addRoundedRect(QRectF(self.rect()), 7, 7)
+        clip.addRoundedRect(QRectF(self.rect()), 3, 3)
         p.setClipPath(clip)
         p.setPen(Qt.NoPen)
         for x, w, c, _tip in self.spans():
@@ -21603,10 +22300,10 @@ class UsageList(QWidget):
             p.drawText(QRectF(0, y, name_w, self.ROW), Qt.AlignLeft | Qt.AlignVCenter,
                        QFontMetrics(f).elidedText(name, Qt.ElideRight, int(name_w)))
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(C["surface_hi"]))
-            p.drawRoundedRect(QRectF(bar_x, y + 8, bar_w, 8), 4, 4)
-            p.setBrush(QColor(C["accent_text"]) if i == 0 else _blend(C["surface_hi"], C["accent_text"], .6))
-            p.drawRoundedRect(QRectF(bar_x, y + 8, max(8, bar_w * m / top), 8), 4, 4)
+            p.setBrush(page_ink(.06))
+            p.drawRoundedRect(QRectF(bar_x, y + 9, bar_w, 6), 2, 2)
+            p.setBrush(QColor(C["accent"]) if i == 0 else page_ink(.42))
+            p.drawRoundedRect(QRectF(bar_x, y + 9, max(6, bar_w * m / top), 6), 2, 2)
             p.setPen(QColor(C["dim"]))
             p.drawText(QRectF(w - val_w, y, val_w, self.ROW), Qt.AlignRight | Qt.AlignVCenter, fmt_minutes(m))
 
@@ -21623,16 +22320,17 @@ class UsageReport(QWidget):
             QLabel#repHero {{ color: {C['accent_text']}; font-size: 40px; font-weight: 800; }}
             QLabel#repHeroLbl {{ color: {C['text']}; font-size: 15px; font-weight: 700; }}
             QLabel#repDim {{ color: {C['dim']}; font-size: 12px; }}
-            QLabel#repPill {{ color: {C['accent_text']}; background: {C['accent_soft']}; border-radius: 11px;
-                padding: 4px 10px; font-size: 12px; font-weight: 600; }}
-            QLabel#repChipOn {{ color: {C['text']}; background: {C['surface_hi']}; border: 1px solid {C['border']};
-                border-radius: 10px; padding: 2px 8px; font-size: 11px; }}
-            QLabel#repChipOff {{ color: {C['faint']}; border: 1px dashed {C['border']}; border-radius: 10px;
+            QLabel#repPill {{ color: {C['dim']}; font-family: {SERIF}; font-style: italic; font-size: 14px;
+                padding: 4px 0; }}
+            QLabel#repChipOn {{ color: {C['text']}; background: transparent; border: 1px solid {C['border']};
+                border-radius: 6px; padding: 2px 8px; font-size: 11px; }}
+            QLabel#repChipOff {{ color: {C['faint']}; border: 1px dashed {C['border']}; border-radius: 6px;
                 padding: 2px 8px; font-size: 11px; }}
-            QLabel#repSec {{ color: {C['dim']}; font-size: 11px; font-weight: 700; letter-spacing: 1px;
-                padding-top: 8px; }}
-            QFrame#repTile {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 10px; }}
-            QLabel#repNum {{ color: {C['accent_text']}; font-size: 24px; font-weight: 800; background: transparent;
+            QLabel#repSec {{ color: {C['dim']}; font-family: {SERIF}; font-style: italic; font-size: 15px;
+                font-weight: 400; padding-top: 10px; }}
+            QFrame#repTile {{ background: transparent; border: none; border-top: 1px solid {C['border']};
+                border-radius: 0; }}
+            QLabel#repNum {{ color: {C['text']}; font-size: 24px; font-weight: 700; background: transparent;
                 border: none; }}
             QLabel#repNumS {{ color: {C['text']}; font-size: 17px; font-weight: 700; background: transparent;
                 border: none; }}
@@ -21656,7 +22354,7 @@ class UsageReport(QWidget):
             tile.setObjectName("repTile")
             tile.setToolTip(tip)
             tl = QVBoxLayout(tile)
-            tl.setContentsMargins(12, 8, 12, 9)
+            tl.setContentsMargins(0, 8, 8, 6)
             tl.setSpacing(0)
             tl.addWidget(self._lab(n, "repNum" if big else "repNumS", tile, False))
             tl.addWidget(self._lab(label, "repLbl", tile))
@@ -21676,7 +22374,7 @@ class UsageReport(QWidget):
         v.addLayout(grid)
 
     def _sec(self, v, title):
-        v.addWidget(self._lab(title.upper(), "repSec"))
+        v.addWidget(self._lab(title, "repSec"))          # a Georgia italic margin note, like the Settings sections
 
     def fill(self, st):
         key = repr(sorted((k, v) for k, v in st.items() if k != "today"))
@@ -21785,10 +22483,10 @@ class UsageReport(QWidget):
 
         recs = []
         if st["longest"]:
-            recs.append((fmt_minutes(st["longest"][0]), f"longest round, {fmt_day(st['longest'][1])}", ""))
-        if st["stretch"] and st["stretch"][0] > 1:
-            recs.append((fmt_minutes(st["stretch"][1]), f"longest stretch, {st['stretch'][0]} rounds back to back, "
-                         f"{fmt_day(st['stretch'][2])}", "Rounds 20 min or less apart"))
+            m, day, n = st["longest"]
+            recs.append((fmt_minutes(m), f"longest run, {n} rounds in a row, {fmt_day(day)}" if n > 1 else
+                         f"longest round, {fmt_day(day)}", "Rounds 20 min or less apart count as one run, breaks "
+                         "included" if n > 1 else ""))
         if st["big_day"]:
             recs.append((fmt_minutes(st["big_day"][1]), f"biggest focus day, {fmt_day(st['big_day'][0])}", ""))
         if st["streak"] > 1:
@@ -21824,17 +22522,17 @@ class CoffeeCard(RoundedWindow):
     W = 480
 
     def __init__(self, store):
-        super().__init__(Qt.Tool | Qt.WindowStaysOnTopHint, accent_border=True)
+        super().__init__(Qt.Tool | Qt.WindowStaysOnTopHint)
         self.store = store
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setStyleSheet(STYLE + f"""
-            QLabel#head {{ color: {C['accent_text']}; font-size: 12px; font-weight: 700; }}
+            QLabel#head {{ color: {C['accent_text']}; font-family: {SERIF}; font-style: italic; font-size: 16px; }}
             QLabel#quip {{ color: {C['text']}; font-size: 15px; font-weight: 600; }}
             QLabel#ask {{ color: {C['dim']}; font-size: 12px; }}
             QPushButton#primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: white;
-                padding: 6px 12px; border-radius: 8px; font-weight: 600; }}
-            QPushButton#primary:hover {{ background: #b54552; }}
-            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 8px; }}""")
+                padding: 6px 12px; border-radius: 6px; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: {C['accent_hover']}; }}
+            QPushButton#ghost {{ background: transparent; padding: 6px 12px; border-radius: 6px; }}""")
         m = self.SHADOW
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20 + m, 16 + m, 20 + m, 16 + m)
@@ -21846,6 +22544,9 @@ class CoffeeCard(RoundedWindow):
         x.setText("\u2715")
         x.setToolTip("Close")
         x.clicked.connect(self.hide)
+        top.setSpacing(8)
+        self.enso = EnsoMark(8, self)            # closed, in page ink: the rounds so far
+        top.addWidget(self.enso, 0, Qt.AlignVCenter)
         top.addWidget(head, 1)
         top.addWidget(x)
         lay.addLayout(top)
@@ -21996,13 +22697,13 @@ class SettingsWindow(QWidget):
 
     def _group(self, v, title=None):
         if title:
-            lab = QLabel(title.upper())
+            lab = QLabel(title)
             lab.setObjectName("section")
             v.addWidget(lab)
-        g = QFrame()
+        g = RuledGroup()
         g.setObjectName("group")
         gl = QVBoxLayout(g)
-        gl.setContentsMargins(14, 8, 14, 8)
+        gl.setContentsMargins(0, 2, 0, 2)
         gl.setSpacing(2)
         v.addWidget(g)
         return gl
@@ -22021,7 +22722,7 @@ class SettingsWindow(QWidget):
         frame.setVisible(False)
 
         def fold(on):
-            head.setText(("\u25BE  " if on else "\u25B8  ") + title.upper() + ("" if on else f"   {summary}"))
+            head.setText(("\u25BE  " if on else "\u25B8  ") + title + ("" if on else f"   {summary}"))
             frame.setVisible(on)
         head.toggled.connect(fold)
         fold(False)
@@ -22416,7 +23117,6 @@ class SettingsWindow(QWidget):
         self.big = QLabel()
         self.big.setFixedSize(96, 96)
         self.big.setAlignment(Qt.AlignCenter)
-        self.big.setStyleSheet(f"background: {C['field']}; border: 1px solid {C['border']}; border-radius: 12px;")
         cap = QLabel("This is your circle.\nPick a color, a shape and a size.")
         cap.setObjectName("rowDesc")
         cap.setWordWrap(True)
@@ -22449,6 +23149,16 @@ class SettingsWindow(QWidget):
             rl.addWidget(sw)
         rl.addStretch(1)
         gl.addWidget(roww)
+        color_row = roww
+
+        def picked_shape(kk):
+            if kk != b.shape:
+                ctx.set_look("circle_shape", kk)
+                refresh_big()
+            color_row.setEnabled(kk not in INK_SHAPES)  # the ink looks follow the theme; colours are for the others
+            color_row.setToolTip("The ink looks follow the theme. Colors are for the other shapes."
+                                 if kk in INK_SHAPES else "")
+        picked_shape(b.shape)
 
         gl = self._group(v, "Shape")
         roww = QWidget()
@@ -22462,10 +23172,10 @@ class SettingsWindow(QWidget):
             t = PreviewTile(bubble_preview(b, shape=k), label.split(" (")[0], roww)
             t.setChecked(k == b.shape)
             grp2.addButton(t)
-            t.clicked.connect(lambda _=False, kk=k: (ctx.set_look("circle_shape", kk), refresh_big()))
+            t.clicked.connect(lambda _=False, kk=k: picked_shape(kk))
             rl.addWidget(t, i // 3, i % 3, Qt.AlignCenter)
             tiles[k] = t
-        gl.addWidget(roww, 0, Qt.AlignHCenter)
+        gl.addWidget(roww, 0, Qt.AlignLeft)
 
         def refresh_shapes():
             for k, t in tiles.items():
@@ -22569,7 +23279,7 @@ class SettingsWindow(QWidget):
                      "session card.", "track_apps", True)
         gl3 = self._group(v, "Phone alert")
         intro = QLabel("Get a buzz on your phone when a break ends, even in another room. Install the free <b>ntfy</b> "
-                       "app, tap + and subscribe to this topic. Only \"Break's over\" is sent, never your notes.")
+                       "app, tap + and subscribe to this topic. Only \"Break's over\" is sent, and with the phone app, its reminders.")
         intro.setObjectName("rowDesc")
         intro.setTextFormat(Qt.RichText)
         intro.setWordWrap(True)
@@ -22598,6 +23308,14 @@ class SettingsWindow(QWidget):
             priority=5, on_done=self.push_result.emit)))
         self._row(gl3, "Test it", "Your phone should buzz within a few seconds.", test)
         gl3.addWidget(self.push_status)
+        link = QLineEdit(self._s("phone_sync_url", ""))
+        link.setPlaceholderText("https://script.google.com/macros/s/.../exec?k=...")
+        link.setToolTip("Works like a password: anyone with this link can see and add notes.")
+        link.editingFinished.connect(lambda: self._set("phone_sync_url", link.text().strip()))
+        sync = getattr(QApplication.instance(), "_phone_sync", None)
+        self._row(gl3, "Phone app link", "Park from your phone, synced through your own Google account. Setup: phone/README.md. "
+                  + (sync.status if sync and self._s("phone_sync_url", "") else "Off until you paste a link."),
+                  link, stretch_control=True)
         gl = self._group(v, "Today")
         n, total = FocusTimer.today_stats()
         self._row(gl, f"{n} rounds done · {total} min focused", "Everything is in the focus log.",
@@ -22612,8 +23330,7 @@ class SettingsWindow(QWidget):
                                           "round. It stays quiet in full screen, calls and presentations.")
         gl = self._group(v, "Check-ins")
         stat = QLabel(ctx.nudges.status())
-        stat.setObjectName("rowTitle")
-        stat.setStyleSheet(f"color: {C['glimmer']};")
+        stat.setObjectName("statusLine")
         gl.addWidget(stat)
         self._toggle(gl, "Friendly check-ins", "Only counts time you're actually using the computer (and it keeps "
                      "counting through a restart).", "nudge_on", True)
@@ -22625,6 +23342,9 @@ class SettingsWindow(QWidget):
         self._seg(gl, "Every", "Minutes of screen time between check-ins.",
                   [(m, f"{m}") for m in (20, 30, 45, 60, 90)], self._s("nudge_every_min", 45),
                   lambda k: self._set("nudge_every_min", k))
+        self._seg(gl, "Show as", "A card next to the circle, or a small dot on the circle that waits until you "
+                  "click it.", [("card", "Card"), ("dot", "Dot on the circle")], self._s("checkin_style", "card"),
+                  lambda k: self._set("checkin_style", k))
         paused = self._s("nudge_paused_until", 0) > time.time()
         pause_box = QWidget()
         pb = QHBoxLayout(pause_box)
@@ -22698,6 +23418,10 @@ class SettingsWindow(QWidget):
             hb.addWidget(self._button("Block", lambda: start(spin.value())))
         hb.addStretch(1)
         gl.addWidget(box)
+        for pick, until in bl.long_allows().items():
+            self._row(gl, f"{app_nice(pick)} allowed until {datetime.fromtimestamp(until):%H:%M}",
+                      "It stays open in every block until then.",
+                      self._button("Block again", lambda _=False, p_=pick: (bl.block_again(p_), self.open_at("blocker"))))
         self._toggle(gl, "Block in every focus session", "Each focus session closes these apps and keeps them "
                      "closed until it ends.", "block_with_focus", False)
 
@@ -23601,6 +24325,9 @@ def main():
             for minutes in (25, 50, 90):
                 bm.addAction(f"Block for {minutes} min", lambda n=minutes: bl.begin(n))
             bm.addAction("Block for...", block_for)
+        for pick, until in bl.long_allows().items():
+            bm.addAction(f"Block {app_nice(pick)} again (allowed until {datetime.fromtimestamp(until):%H:%M})",
+                         lambda p=pick: bl.block_again(p))
         bm.addSeparator()
         fa = bm.addAction("Block in every focus session")
         fa.setCheckable(True)
@@ -23805,6 +24532,7 @@ def main():
     quickbox = QuickBox(panel)
     holder["quickbox"] = quickbox
     app._note_alarms = NoteAlarmManager(store, app, panel.refresh_later, bubble, panel)
+    app._phone_sync = PhoneSync(store, panel.refresh_later, app)
     for key, w in (("opacity_circle", bubble), ("opacity_quick", quickbox), ("opacity_list", panel)):
         w.setWindowOpacity(max(0.3, min(1.0, float(setting(key, 1.0)))))
     hotkeys.quick.connect(quickbox.toggle)
@@ -23824,7 +24552,7 @@ def main():
     display_setting = setting("timer_display", "time")
     bubble.timer_display = display_setting if display_setting in ("ring", "time", "hidden") else "time"
     bubble.ring_style = setting("ring_style", "ember") if setting("ring_style", "ember") in RING_STYLE_KEYS else "ember"
-    bubble.set_look(color=setting("circle_color", "white"), shape=setting("circle_shape", "cloud"),
+    bubble.set_look(color=setting("circle_color", "white"), shape=setting("circle_shape", "inkcloud"),
                     size=setting("circle_size", "medium"))
     THEME["hooks"].append(bubble.update)
     bubble.timer = timer
@@ -23925,7 +24653,8 @@ def main():
             glim = session_glimmers(store, ls["start"], ls["end"]) if flag_on(store.settings, "glimmer") else 0
             session_card.show_for(bubble.geometry(), minutes, parked, urges, dists, bm, fm, auto_break=auto,
                                   glimmers=glim, today=today_summary(store), on=ls.get("on", ""),
-                                  apps=timer.last_apps, blocked=holder["blocker"].take_tries())
+                                  apps=timer.last_apps, blocked=holder["blocker"].take_tries(),
+                                  run=run_before(ls["start"]))
             if topic and setting("ntfy_focus", False):
                 send_phone_push(topic, "Focus session done", f"{fmt_min(minutes)} min done. Time for a break.", priority=3)
         if setting("timer_sound", True):
@@ -23957,7 +24686,7 @@ def main():
             remember_bubble(bubble.pos())
     QGuiApplication.instance().screenRemoved.connect(lambda *_: QTimer.singleShot(500, rescue_bubble))
     QGuiApplication.instance().primaryScreenChanged.connect(lambda *_: QTimer.singleShot(500, rescue_bubble))
-    bubble.clicked.connect(panel.toggle)
+    bubble.clicked.connect(lambda: nudges.show_pending() or panel.toggle())   # a waiting check-in comes first
     def gesture_ok():
         """Scribbles only count near the circle (on by default), and never while you're in a call."""
         if setting("gesture_calls_off", True) and mic_or_camera_in_use():
