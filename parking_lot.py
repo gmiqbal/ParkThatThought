@@ -53,6 +53,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QEvent, QLockFile, QProcess, QRect, QVariantAnimation, QMimeData, QObject, QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QIntValidator, QKeySequence,
+                           QValidator,
                            QPainter, QPen, QPixmap, QPolygonF, QShortcut)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
                                QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
@@ -64,7 +65,7 @@ from PySide6.QtWidgets import QAbstractButton, QGraphicsOpacityEffect, QPlainTex
 from PySide6.QtCore import QPropertyAnimation, QDate, QDateTime, QTime, QTimeZone, QLineF
 from PySide6.QtWidgets import QButtonGroup, QCalendarWidget, QDateEdit, QDateTimeEdit, QTimeEdit, QSlider, QStackedWidget
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QCursor, QFontMetrics, QTextCharFormat
+from PySide6.QtGui import QCursor, QFontMetrics, QPalette, QTextCharFormat
 from PySide6.QtWidgets import QBoxLayout, QComboBox, QListWidget, QListWidgetItem, QSplitter
 from PySide6.QtWidgets import QFileDialog
 from PySide6.QtWidgets import QColorDialog
@@ -84,8 +85,16 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.7"
+APP_VERSION = "1.7.1"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.7.1", "19 Oct 2026", "Clearer rows, a richer calendar", ("Flags and reminders sit in the left margin; urgent notes get a red bracket. Full titles, no cut-off.",
+                           "Later and Completed sit under a divider you can drag.",
+                           "Calendar: drag events to move them, type any start, end or length, page up to a year either way.",
+                           "The meeting bar shows two meetings a line each. Join shows from 10 minutes before a call.",
+                           "Type a time like 7:20 in the focus or break box to run till then.",
+                           "Blocked app: Allow it for just 2, 5 or 10 minutes too.",
+                           "Your stats: how often you tried to open a blocked app, and which.",
+                           "The white glossy cloud is the default circle again; the ink looks stay in Settings.")),
     ("1.7", "11 Oct 2026", "One page", ("A new look: your notes on a ruled page, flags as margin words, Settings and cards as paper.",
                            "The circle is a thought cloud drawn in ink. The ens\u014d and the older shapes are in Settings.",
                            "Urgent notes stand out in red. Reminders get their own bell tag.",
@@ -211,17 +220,6 @@ def meeting_bar_background(settings):
     """A chosen solid color, or the theme's page."""
     color = QColor(str(settings.get("meeting_bar_bg") or ""))
     return color.name() if color.isValid() else C["bg"]
-
-
-def meeting_countdown(e, now, window=3600):
-    """How full the bar's enso is: it fills over the last hour before an event, then empties while it runs.
-    None for an all-day event (nothing to count)."""
-    if e.get("all_day"):
-        return None
-    if now < e["start"]:
-        return max(0.0, 1 - (e["start"] - now).total_seconds() / window)
-    span = (e["end"] - e["start"]).total_seconds()
-    return max(0.0, min(1.0, (e["end"] - now).total_seconds() / span)) if span > 0 else 0.0
 
 
 def calendar_alert_minutes(settings):
@@ -1419,21 +1417,23 @@ def tips_on():
 
 class TipGate(QObject):
     """App-wide: swallows hover tooltips once you know your way around (after the first week, by default). A
-    widget or window with the "keep_tips" property (icon-only buttons: the meeting bar, the list header) keeps them,
+    widget, a box or window with the "keep_tips" property (icon-only buttons: the meeting bar, the list header) keeps them,
     even with tips Off: on an icon-only button the tip is its name."""
 
     def eventFilter(self, obj, e):
         if e.type() == QEvent.ToolTip and not tips_on():
-            keep = isinstance(obj, QWidget) and bool(obj.property("keep_tips") or obj.window().property("keep_tips"))
-            return not keep
+            w = obj if isinstance(obj, QWidget) else None
+            while w is not None and not w.property("keep_tips"):       # the widget, a box it sits in, or its window
+                w = w.parentWidget()
+            return w is None
         return False
 
 
 def flag_focus_hint(obj, e):
     """Hover or Tab onto a flag: its name and meaning appear after FLAG_HINT_DELAY_MS (same for both)."""
     global FLAG_HINT
-    if not (hasattr(obj, "property") and obj.property("flaghint")) or not tips_on():
-        return
+    if not (hasattr(obj, "property") and obj.property("flaghint")):
+        return          # flags are icons: their name shows past the first week too (like keep_tips)
     if FLAG_HINT is None:
         FLAG_HINT = _FlagHint()
     t = e.type()
@@ -1460,7 +1460,7 @@ def flag_on(settings, key):
     return bool(settings.get("flags_on", {}).get(key, True))
 
 SERIF = "Georgia"        # the app title and margin notes only; notes stay in the UI font
-ROW_MARGIN = 76          # the full list's left margin: flag words and reminder times sit in it
+ROW_MARGIN = 90          # the full list's left margin: flag words and the reminder; its rule turns red if urgent
 
 
 def serif_font(px, italic=True):
@@ -1533,10 +1533,14 @@ QToolButton#act[good="true"] {{ color: {C['glimmer']}; }}
 QToolButton#act[good="true"]:hover {{ border: 1px solid {C['glimmer']}; background: {C['glimmer_bg']}; }}
 QToolButton#act[danger="true"] {{ color: {C['faint']}; }}
 QToolButton#act[danger="true"]:hover {{ color: {C['anti']}; border: 1px solid {C['anti']}; background: {C['anti_bg']}; }}
+QToolButton#act[row="true"] {{ border: none; background: transparent; padding: 3px 5px; border-radius: 6px; }}
+QToolButton#act[row="true"]:hover {{ border: none; background: {C['border']}; }}
 QToolButton#act:focus {{ color: {C['text']}; background: {C['accent']}; border: 1px solid {C['accent']}; }}
 QToolButton#morePill {{ background: {C['surface_hi']}; color: {C['dim']}; border: 1px solid {C['border']};
     border-radius: 10px; padding: 2px 10px; font-size: 11px; }}
 QToolButton#morePill:hover {{ color: {C['text']}; border: 1px solid {C['faint']}; background: {C['surface']}; }}
+QSplitter#listSplit::handle {{ background: transparent; }}
+QSplitter#listSplit::handle:hover:enabled {{ background: {C['border']}; }}
 QFrame#toast {{ background: {C['toast']}; border: 1px solid {C['toast_border']}; border-radius: 15px; }}
 QToolButton#toastClose {{ background: transparent; border: none; border-radius: 9px; padding: 3px; }}
 QToolButton#toastClose:hover {{ background: {C['accent_soft']}; }}
@@ -2650,6 +2654,23 @@ def usage_stats(store, today=None):
     checkins = [x for x in sessions if x.get("kind") == "checkin"]
     breaks = [x for x in sessions if x.get("kind") == "break"]
     blocks = [x for x in sessions if x.get("kind") == "block"]
+    tried, caught = {}, 0
+    note_n = lambda pat, x: int(m.group(1)) if (m := re.search(pat, str(x.get("note")))) else 0
+    for x in blocks:
+        m = re.search(r"tried (.+?)(?:;|$)", str(x.get("note")))
+        n_row = 0
+        for bit in re.split(r", | and ", m.group(1)) if m else []:   # ponytail: read back from the note's "tried" list
+            if t := re.fullmatch(r"(.+) (?:(\d+) times|once)", bit):
+                tried[t.group(1)] = tried.get(t.group(1), 0) + int(t.group(2) or 1)
+                n_row += int(t.group(2) or 1)
+        caught += n_row or note_n(r"caught (\d+) time", x)          # older notes have only the total
+    marks = {x.get("session_start"): set(x.get("distracting") or []) for x in sessions
+             if x.get("kind") == "app_marks"}                     # later rows win: the last press on the card
+    marked = {}
+    for _t, x in focus:
+        for a in x.get("apps") or []:
+            if isinstance(a, dict) and a.get("app") in marks.get(x.get("start"), ()):
+                marked[app_nice(a["app"])] = marked.get(app_nice(a["app"]), 0) + num(a.get("min"))
     try:
         photos = sum(1 for _ in SNAP_DIR.glob("snap-*.jpg"))
     except OSError:
@@ -2670,8 +2691,10 @@ def usage_stats(store, today=None):
         snoozes=sum(r["reminder_snoozes"] for r in rows),
         breaks=len(breaks), break_min=sum(mins(x) for x in breaks),
         stretched=sum(1 for x in sessions if x.get("kind") == "break_extension"),
-        blocks=len(blocks), photos=photos,
-        caught=sum(int(m.group(1)) for x in blocks if (m := re.search(r"caught (\d+) time", str(x.get("note"))))),
+        blocks=len(blocks), photos=photos, caught=caught, tried=top(tried, 5),
+        block_min=sum(mins(x) for x in blocks), let_in=sum(note_n(r"apps let in: (\d+)", x) for x in blocks),
+        early=sum(1 for x in blocks if "stopped early" in str(x.get("note"))),
+        marked=top(marked, 5), marked_min=sum(marked.values()),
         itches=sum(r["itch_acted_count"] for r in rows))
     s = store.settings
     calendar = s.get("google_calendar_auth") or s.get("google_calendar_feeds") or s.get("google_calendar_feed")
@@ -3748,6 +3771,8 @@ class AppBlocker(QObject):
         tries = self.tries_text(b)
         if tries:
             note += "; " + tries[:-1].replace("You tried to open ", "tried ")
+        if b.get("let_in"):
+            note += f"; apps let in: {b['let_in']}"
         if early and b.get("until"):
             note += f"; stopped early, {round(left)} min left"
         FocusTimer._write({"kind": "block", "start": datetime.fromtimestamp(b["start"]).isoformat(timespec="seconds"),
@@ -3816,13 +3841,15 @@ class AppBlocker(QObject):
         if not b:
             return
         b.setdefault("allow", {})[pick] = time.time() + float(minutes) * 60
+        b["let_in"] = b.get("let_in", 0) + 1                    # Your stats: times you let an app in
         b["allow_warned"] = [p for p in b.get("allow_warned", []) if p != pick]
         self._save()
         self.changed.emit()
         self.say(f"{app_nice(pick)} is open for {fmt_min(round(float(minutes)))} min.", [], timeout_ms=4000,
                  emoji="\U0001F513")
 
-    ALLOWS = [("This block", "block"), ("2 h", 7200), ("4 h", 14400), ("Rest of today", "today")]
+    ALLOWS = [("2 min", 120), ("5 min", 300), ("10 min", 600),
+              ("This block", "block"), ("2 h", 7200), ("4 h", 14400), ("Rest of today", "today")]
 
     def long_allows(self):
         """{pick: until} of picked apps allowed for hours or the rest of today; expired ones are dropped."""
@@ -3836,7 +3863,7 @@ class AppBlocker(QObject):
 
     def ask_allow(self, pick):
         self.say(f"Allow {app_nice(pick)} for how long?", [(label, f"alw:{pick}_{span}") for label, span in self.ALLOWS],
-                 timeout_ms=20000)
+                 timeout_ms=20000, minute_input=(f"alwm:{pick}", 600, "Allow"))
 
     def allow_long(self, pick, span):
         """Let one app stay open: for this block ("block"), a number of seconds, or the rest of today ("today").
@@ -3845,6 +3872,8 @@ class AppBlocker(QObject):
             return self.stop_for(pick)
         until = rest_of_today() if span == "today" else time.time() + float(span)
         self.store.settings.setdefault("block_allow", {})[pick] = until
+        if self.block:
+            self.block["let_in"] = self.block.get("let_in", 0) + 1
         self._save()
         self.changed.emit()
         self.say(f"{app_nice(pick)} is allowed until {datetime.fromtimestamp(until):%H:%M}, in every block.", [],
@@ -3865,6 +3894,7 @@ class AppBlocker(QObject):
         if not b:
             return
         b.setdefault("allow", {})[pick] = time.time() + 366 * 86400   # ponytail: "until the block ends"; it ends first
+        b["let_in"] = b.get("let_in", 0) + 1
         self._save()
         self.changed.emit()
         self.say(f"{app_nice(pick)} is unblocked until this block ends.", [], timeout_ms=4000, emoji="\U0001F513")
@@ -3892,6 +3922,9 @@ class AppBlocker(QObject):
         elif key.startswith("alw:"):
             pick, _, span = key[4:].rpartition("_")
             self.allow_long(pick, span if span in ("block", "today") else int(span))
+        elif key.startswith("alwm:") and key.rpartition("_")[2].isdigit():     # typed minutes
+            pick, _, n = key[5:].rpartition("_")
+            self.allow_long(pick, int(n) * 60)
         elif key.startswith("unb:") and key.rpartition("_")[2].isdigit():
             pick, _, n = key[4:].rpartition("_")
             self.allow(pick, int(n))
@@ -4204,10 +4237,41 @@ def short_text(text, n):
 
 
 class MinSpin(QDoubleSpinBox):
-    """Minutes field: plain number, halves allowed (0.5 = 30 s, handy for testing)."""
+    """Minutes field: plain number, halves allowed (0.5 = 30 s, handy for testing). Or a time (7 pm, 7:20, 720):
+    the next round runs till then, once (`take_till`); the saved length stays."""
+    till = ""           # the typed time, until a round starts with it
+    unit = None         # the "min" label beside it, hidden while it holds a time
+
+    def validate(self, text, pos):
+        if till_minutes(text) is not None:
+            return QValidator.Acceptable, text, pos
+        state = super().validate(text, pos)
+        if state[0] == QValidator.Invalid and re.fullmatch(r"[\d\s:.apmtiluno]{0,12}", text.lower()):
+            return QValidator.Intermediate, text, pos     # half typed: "7:", "7 p", "till"
+        return state
+
+    def valueFromText(self, text):
+        self.till = text if till_minutes(text) is not None else ""
+        if self.unit:
+            self.unit.setVisible(not self.till)
+        return self.value() if self.till else super().valueFromText(text)
 
     def textFromValue(self, v):
+        if self.till:
+            at = datetime.now() + timedelta(minutes=till_minutes(self.till))
+            return f"{at:%I:%M}".lstrip("0")      # 7:00, 11:59: the field fits no am/pm
         return fmt_min(v)
+
+    def take_till(self):
+        """Minutes till the typed time (then back to the plain length), or None."""
+        self.interpretText()
+        m = till_minutes(self.till) if self.till else None
+        if self.till:
+            self.till = ""
+            if self.unit:
+                self.unit.setVisible(True)
+            self.lineEdit().setText(self.textFromValue(self.value()))
+        return m
 
 
 def fmt_mmss(sec):
@@ -4752,7 +4816,8 @@ class SpeechBubble(QWidget):
         self._minute_prefix = (text_input or minute_input or (None,))[0]
         self._text_mode = bool(text_input)
         self.minute_edit.clear()
-        self.minute_edit.setValidator(None if text_input else self.minute_validator)
+        self._clock_ok = not text_input and bool(minute_input) and minute_input[0] in ("focus", "break")
+        self.minute_edit.setValidator(None if text_input or self._clock_ok else self.minute_validator)
         self.minute_edit.setMaxLength(80)
         lay = self.layout()
         lay.removeWidget(self.minute_row)
@@ -4763,7 +4828,7 @@ class SpeechBubble(QWidget):
             self.minute_start.setText(text_input[2])
         elif minute_input:
             self.minute_validator.setTop(minute_input[1])
-            self.minute_edit.setPlaceholderText("Custom minutes")
+            self.minute_edit.setPlaceholderText("Minutes, or till 7:20" if self._clock_ok else "Custom minutes")
             self.minute_edit.setAccessibleName(f"Custom {minute_input[0]} minutes")
             self.minute_start.setText(minute_input[2] if len(minute_input) > 2 else "Start")
         self.minute_row.setVisible(bool(minute_input or text_input))
@@ -4862,6 +4927,12 @@ class SpeechBubble(QWidget):
         t = self.minute_edit.text()
         if getattr(self, "_text_mode", False):
             return " ".join(t.split())
+        if getattr(self, "_clock_ok", False):        # focus or break: minutes, or a time to run till
+            m = till_minutes(t)
+            if m is not None:
+                return f"till{m:.3f}"
+            t = t.strip()
+            return t if t.isdigit() and 1 <= int(t) <= self.minute_validator.top() else ""
         return t if self.minute_edit.hasAcceptableInput() else ""
 
     def _minute_text_changed(self):
@@ -5924,21 +5995,27 @@ class NudgeManager(QObject):
                 QTimer.singleShot(0, self.ask_focus_minutes)
             return
         if msg == "__focus_length__":
+            raw = key[len("focus_"):] if key.startswith("focus_") else ""
+            till = raw.startswith("till")          # a typed time: run till then, keep the usual length
             try:
-                minutes = float(key[len("focus_"):]) if key.startswith("focus_") else 0
+                minutes = float(raw[4:] if till else raw or 0)
             except ValueError:
                 minutes = 0
-            if 1 <= minutes <= 600:
+            if till and 0 < minutes <= 24 * 60:
+                self.wants_focus.emit(minutes)
+            elif 1 <= minutes <= 600:
                 self.store.settings["focus_min"] = minutes
                 self.store.save()
                 self.wants_focus.emit(minutes)
             return
         if msg == "__break_length__":
+            raw = key[len("break_"):] if key.startswith("break_") else ""
+            till = raw.startswith("till")
             try:
-                minutes = float(key[len("break_"):]) if key.startswith("break_") else 0
+                minutes = float(raw[4:] if till else raw or 0)
             except ValueError:
                 minutes = 0
-            if 1 <= minutes <= 600:
+            if 1 <= minutes <= 600 or till and 0 < minutes <= 24 * 60:
                 self.wants_break.emit(minutes)
             return
         if msg == "__other_task__":
@@ -6622,11 +6699,13 @@ CIRCLE_COLORS = {"white": ("White", "#ffffff", "#eef3f9", "#aebfd2", "#ffffff"),
                  "mustard": ("Mustard", "#e6c46a", "#a8822a", "#56420f", "#eecf7a"),
                  "graphite": ("Graphite", "#8e939c", "#4a4e56", "#202328", "#9ea3ab")}
 CIRCLE_LOOKS = [("auto", ("Auto: white on dark, midnight on light", "#ffffff"))] + list(CIRCLE_COLORS.items())
-CIRCLE_SHAPES = {"inkcloud": "Thought cloud (ink)", "enso": "Ens\u014d (ink circle)", "cloud": "Thought cloud (glossy)", "circle": "Circle", "squircle": "Squircle (soft square)",
+CIRCLE_SHAPES = {"cloud": "Thought cloud (glossy)", "inkcloud": "Thought cloud (ink)", "enso": "Ens\u014d (ink circle)", "circle": "Circle", "squircle": "Squircle (soft square)",
                  "pebble": "Pebble (hand-made look)", "capsule": "Capsule (wide and calm)",
                  "diamond": "Soft diamond", "oval": "Oval (tall and simple)",
                  "hexagon": "Soft hexagon", "speech": "Speech bubble"}
-CIRCLE_SIZES = {"small": ("Small", 0.82), "medium": ("Medium", 1.0), "large": ("Large", 1.22), "xl": ("Extra large", 1.45)}
+# (name, scale, ink scale): the ink looks fill more of the widget, so their Small is smaller, the old Small's footprint
+CIRCLE_SIZES = {"small": ("Small", 0.82, 0.62), "medium": ("Medium", 1.0, 1.0), "large": ("Large", 1.22, 1.22),
+                "xl": ("Extra large", 1.45, 1.45)}
 ENSO_STEPS = 360
 _ENSO_CACHE = {}     # (r, width) -> outline points around (0, 0); built once per size, never per paint
 INK_SHAPES = ("inkcloud", "enso")   # drawn in page ink on the page colour: they follow the theme, never breathe
@@ -6722,16 +6801,6 @@ def paint_inkcloud(p, B, width, upto=1.0, color=None, alpha=1.0):
     p.restore()
 
 
-def paint_swipe(p, rect, color):
-    """A highlighter under the lower half of a line of text."""
-    p.save()
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(color))
-    p.drawRoundedRect(QRectF(rect.left() - 2, rect.top() + rect.height() * 0.5, rect.width() + 4,
-                             rect.height() * 0.42), 2, 2)
-    p.restore()
-
-
 class EnsoMark(QWidget):
     """A small enso: the mark beside the app title, and on the focus line the time done in its colour."""
 
@@ -6799,9 +6868,10 @@ class Bubble(QWidget):
         self.timer_display = "time"  # ring | time | hidden
         self.ring_style = "ember"    # see RING_STYLES
         self.color_key = "white"     # see CIRCLE_COLORS; "auto" = white on dark, midnight on light
-        self.shape = "inkcloud"      # see CIRCLE_SHAPES
+        self.shape = "cloud"         # see CIRCLE_SHAPES
         self.waiting = False         # a check-in waits as a small dot (Settings > Check-ins > Show as)
         self.scale = 1.0
+        self.size_key = "medium"     # see CIRCLE_SIZES
         self.drop_handler = None     # callable(QMimeData) -> bool, set by main()
         self._drag_hover = False
         self.hover_e = Ease(self)            # 0..1, eases in on hover (brighter top, a touch bigger)
@@ -6865,7 +6935,9 @@ class Bubble(QWidget):
         if shape in CIRCLE_SHAPES:
             self.shape = shape
         if size in CIRCLE_SIZES:
-            scale = CIRCLE_SIZES[size][1]
+            self.size_key = size
+        if size in CIRCLE_SIZES or shape in CIRCLE_SHAPES:
+            scale = CIRCLE_SIZES[self.size_key][2 if self.shape in INK_SHAPES else 1]
             if abs(scale - self.scale) > 1e-6:
                 centre = self.geometry().center()
                 self.scale = scale
@@ -7386,6 +7458,8 @@ class Bubble(QWidget):
             while px > max(6, int(7 * s)) and QFontMetrics(f).horizontalAdvance(txt) > 2 * (r - w / 2):
                 px -= 1
                 f.setPixelSize(px)
+            if QFontMetrics(f).horizontalAdvance(txt) > 2 * (r - w / 2):
+                txt = f"{math.ceil(left / 60)}m"         # Small: whole minutes when 24:59 won't fit
             p.setFont(f)
             p.setPen(QColor(C["text"]))
             p.drawText(QRectF(-r, -r, 2 * r, 2 * r), Qt.AlignCenter, txt)
@@ -8098,6 +8172,23 @@ def parse_clock(text):
     if half:
         hour = hour % 12 + (12 if half == "p" else 0)
     return hour, minute
+
+
+def till_minutes(text, now=None):
+    """'7 pm', '7:20', '720', 'till 7pm' -> minutes from now to the next such time, else None. One or two digits
+    (25, 0.5) are minutes, not a time. With no am/pm, the sooner of the two (7:20 is 7:20 pm after 7:20 am)."""
+    t = re.sub(r"^\s*(till|until|to)\s+", "", str(text or "").lower())
+    if re.fullmatch(r"\s*\d{0,2}(\.\d*)?\s*", t):
+        return None
+    hm = parse_clock(t)
+    if not hm:
+        return None
+    now = now or datetime.now()
+    at = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+    step = timedelta(hours=12 if "a" not in t and "p" not in t and 1 <= hm[0] <= 12 else 24)
+    while at <= now:
+        at += step
+    return (at - now).total_seconds() / 60
 
 
 def clock_text(at):
@@ -9198,7 +9289,8 @@ class NoteAlarmManager(QObject):
 
 
 class RuledPage(QWidget):
-    """The full list's page: a seal-red margin rule down the left and a faint rule between notes."""
+    """The full list's page: a faint seal-red margin rule down the left and a faint rule between notes. Beside an
+    urgent note the margin rule thickens to red, so a run of urgent notes reads as one bracket."""
 
     def paintEvent(self, e):
         cards = sorted((w for w in self.children() if isinstance(w, TaskCard) and not w.isHidden()), key=lambda c: c.y())
@@ -9209,7 +9301,12 @@ class RuledPage(QWidget):
         for a, b in zip(cards, cards[1:]):
             p.fillRect(QRect(0, (a.geometry().bottom() + 1 + b.y()) // 2, self.width(), 1), rule)
         top, bottom = cards[0].y(), cards[-1].geometry().bottom() + 1
-        p.fillRect(QRect(ROW_MARGIN - 1, top, 1, bottom - top), _blend(C["bg"], C["accent"], 0.45))
+        p.fillRect(QRect(ROW_MARGIN - 1, top, 1, bottom - top), _blend(C["bg"], C["accent"], 0.22))
+        red = QColor(C["urgent"])
+        for c in cards:
+            if c.task.get("urgent") and not c.task["done"]:
+                g = c.geometry()
+                p.fillRect(QRect(ROW_MARGIN - 3, g.top() - 1, 3, g.height() + 2), red)   # through the gaps
 
 
 class TaskCard(QFrame):
@@ -9226,7 +9323,7 @@ class TaskCard(QFrame):
         self.setProperty("done", bool(task["done"]))
         outer = QHBoxLayout(self)
         self.outer = outer
-        outer.setContentsMargins(ROW_MARGIN + 10, 8, 4, 9)   # the margin holds the flag words and reminder time
+        outer.setContentsMargins(ROW_MARGIN + 8, 7, 6, 7)
         self.hover = Ease(self)
         outer.setSpacing(9)
 
@@ -9253,14 +9350,13 @@ class TaskCard(QFrame):
 
         self.reminder_status = QToolButton(self)
         self.reminder_status.setObjectName("reminderStatus")
-        self.reminder_status.setStyleSheet(          # a plum tag in the margin, under the flag words: a bell and the time
-            f"QToolButton#reminderStatus {{ color: {C['rem_fg']}; background: {C['rem_bg']}; "
-            f"border: 1px solid {C['rem_border']}; border-radius: 4px; padding: 0px 3px; font-size: 11px; "
-            f"font-weight: 600; }} "
-            f"QToolButton#reminderStatus:hover, QToolButton#reminderStatus:focus {{ background: {C['rem_hover']}; "
+        self.reminder_status.setStyleSheet(          # in the margin under the flag words, in their face and size
+            f"QToolButton#reminderStatus {{ color: {C['rem_fg']}; background: transparent; border: none; "
+            f"padding: 0px; font-family: {SERIF}; font-style: italic; font-size: {self.MARGIN_FONT}px; }} "
+            f"QToolButton#reminderStatus:hover, QToolButton#reminderStatus:focus {{ color: {C['text']}; "
             f"text-decoration: underline; }}")
         self.reminder_status.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.reminder_status.setIconSize(QSize(10, 10))
+        self.reminder_status.setIconSize(QSize(11, 11))
         self._bell_color = None
         self.reminder_status.setCursor(Qt.PointingHandCursor)
         self.reminder_status.setFocusPolicy(Qt.StrongFocus)
@@ -9329,13 +9425,13 @@ class TaskCard(QFrame):
             w.installEventFilter(self)
             w.setAcceptDrops(False)
 
-        # hover actions (floating, so the title keeps its full width)
+        # hover actions (floating on the row's right end, over the reminder and flag words, never on another note)
         self.actions = ActionPill(self)
         self.actions.setObjectName("actionPill")   # painted by ActionPill itself
         ah = QHBoxLayout(self.actions)
-        ah.setContentsMargins(3, 2, 3, 2)
+        ah.setContentsMargins(ActionPill.FADE, 0, 2, 0)
         self.destroyed.connect(self.actions.deleteLater)   # it lives in the list, so it goes with the note
-        ah.setSpacing(4)
+        ah.setSpacing(1)
         self.ob = {}
         self.copy_btn = CopyButton()
         self.copy_btn.setToolTip("Copy this note (Ctrl+C while it's selected)")
@@ -9350,6 +9446,8 @@ class TaskCard(QFrame):
         self.remind_btn.setFocusPolicy(Qt.NoFocus)
         self.remind_btn.clicked.connect(self._edit_reminder)
         self.remind_btn.installEventFilter(self)
+        for b in (self.copy_btn, self.tags_btn, self.remind_btn):
+            b.setProperty("row", True)
         if not task["done"]:
             ah.addWidget(self.tags_btn)
             ah.addWidget(self.remind_btn)
@@ -9370,12 +9468,17 @@ class TaskCard(QFrame):
             if text == "Delete":
                 b = IconAct("trash", C["faint"], C["anti"], "Delete (Delete key; you can undo). For mistakes and "
                                                             "test notes")
+            elif text == "✓ Done":            # icons keep the pill short on the row; the words are in the tip
+                b = IconAct("check", C["glimmer"], C["glimmer"], "Done: " + tip)
+            elif text == "Later":
+                b = IconAct("timer", C["dim"], C["text"], "Later: " + tip)
             else:
                 b = QToolButton()
                 b.setObjectName("act")
                 b.setText(text)
                 b.setToolTip(tip)
             b.setFocusPolicy(Qt.NoFocus)          # reached with Tab from a selected card, not by the Tab chain
+            b.setProperty("row", True)            # flat, on the row's own fill
             if text == "Delete":
                 b.setProperty("danger", True)
             if text.startswith("\u2713"):
@@ -9412,19 +9515,17 @@ class TaskCard(QFrame):
             self.itch_status.clear()
         self.itch_status.setVisible(bool(started or actions))
 
-    MARGIN_TOP, MARGIN_LINE = 10, 16
-
     def _refresh_reminder(self):
         value = self.task.get("reminder")
         short = reminder_short(value) if value else ""
+        rs = self.reminder_status
+        self._tint_bell()                         # the bell first: it is part of the width measured below
+        rs.setText(short)
+        rs.ensurePolished()
         words = short.split(" ")
-        f = QFont()
-        f.setPixelSize(11)
-        f.setWeight(QFont.DemiBold)
-        if QFontMetrics(f).horizontalAdvance(short) > ROW_MARGIN - 29 and len(words) > 2:   # 29: bell, padding, border
+        if rs.sizeHint().width() > ROW_MARGIN - 10 and len(words) > 2:      # wider than the margin: two lines
             cut_at = -2 if words[-1] in ("AM", "PM") else -1      # the time stays on one line
-            short = " ".join(words[:cut_at]) + "\n" + " ".join(words[cut_at:])
-        self.reminder_status.setText(short)
+            rs.setText(" ".join(words[:cut_at]) + "\n" + " ".join(words[cut_at:]))
         label = (reminder_label(value) + ". Click to change or remove it") if value else ""
         self.reminder_status.setToolTip(label)
         self.reminder_status.setAccessibleName(label)
@@ -9438,17 +9539,37 @@ class TaskCard(QFrame):
             self._bell_color = C["rem_fg"]
             self.reminder_status.setIcon(line_icon("bell", C["rem_fg"]))
 
+    MARGIN_LINE, MARGIN_FONT = 16, 12      # flag words and the reminder: one face (Georgia italic), one size
+
+    def _kind_words(self):
+        return [] if self.task["done"] else [m for m in self.margin if m[1] != "urgent"]   # urgent: the red bracket
+
+    def _line_mid(self):
+        """Middle of the title's first line: the first margin line and the hover buttons line up on it."""
+        one = self.title.fontMetrics().lineSpacing() + 2 * self.title.document().documentMargin() + 2
+        return self.outer.contentsMargins().top() + one / 2
+
+    def _margin_top(self):
+        return round(self._line_mid() - self.MARGIN_LINE / 2)
+
     def _fit_margin(self):
-        """The reminder time sits right-aligned in the margin under the flag words; the row grows to fit them."""
-        y = self.MARGIN_TOP + self.MARGIN_LINE * len(self.margin)
+        """The flag words, then the reminder, right-aligned in the margin; the row grows to fit them."""
+        y = self._margin_top() + self.MARGIN_LINE * len(self._kind_words())
         if self.task.get("reminder"):
             rs = self.reminder_status
+            rs.ensurePolished()                       # its style sets its size, even before the list is shown
             rs.adjustSize()
-            rs.resize(min(rs.width(), ROW_MARGIN - 8), rs.height())   # ponytail: clips a too-long time, never spills
-            rs.move(ROW_MARGIN - 6 - rs.width(), y)
+            rs.resize(min(rs.width(), ROW_MARGIN - 10), rs.height())   # ponytail: clips a too-long time, never spills
+            rs.move(ROW_MARGIN - 8 - rs.width(), y)
             y += rs.height()
-        self.setMinimumHeight(y + 6 if y > self.MARGIN_TOP else 0)
+        self.setMinimumHeight(y + 6 if y > self._margin_top() else 0)
         self.update()
+
+    def _kind_rects(self):
+        """[(rect, word, kind, tip)] for the flag words, one per line, right-aligned against the margin rule."""
+        top = self._margin_top()
+        return [(QRectF(2, top + self.MARGIN_LINE * i, ROW_MARGIN - 10, self.MARGIN_LINE), word, kind, tip)
+                for i, (word, kind, tip) in enumerate(self._kind_words())]
 
     def _edit_reminder(self):
         anchor = self.sender() if isinstance(self.sender(), QWidget) else None
@@ -9567,6 +9688,8 @@ class TaskCard(QFrame):
         """Active = you're editing this task: show the details line and the attach hint,
         and keep the hover buttons out of the way of the text (Alt+Up/Down still reorders)."""
         self._active = on
+        if on:
+            self.actions.hide()
         self.flag_row.setVisible(False)            # tags: the Tags button on the pill (keeps the note narrow)
         self.desc.setVisible(bool(self.desc.toPlainText().strip()))   # older notes' details, if any
         self.attach_hint.setVisible(False)         # paste or drop works anyway; no extra line appearing
@@ -9643,8 +9766,8 @@ class TaskCard(QFrame):
         return QColor(C[self.FLAG_TONE[kind]] if kind in self.FLAG_TONE else FLAG_COLORS.get(kind, C["dim"]))
 
     def paintEvent(self, e):
-        """A ruled row on the page: the flag words in the margin, a highlighter under a flagged title. The row you're
-        on (keys or mouse) gets a page-tone fill and a 2 px seal tick in the margin; hover eases a lighter fill in."""
+        """A ruled row on the page: flag words in their colours in the margin. The row you're on (keys or mouse)
+        gets a page-tone fill; hover eases a lighter fill in. Urgent is the red margin bracket (RuledPage)."""
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -9653,45 +9776,15 @@ class TaskCard(QFrame):
         if self.is_current():
             p.setBrush(QColor(C["surface_hi"]))
             p.drawRect(text_side)
-            p.setBrush(QColor(C["accent"]))
-            p.drawRoundedRect(QRectF(ROW_MARGIN - 5, 6, 2, max(6, self.height() - 12)), 1, 1)
         elif self.hover.v:
             fill = QColor(C["surface_hi"])
             fill.setAlphaF(0.6 * self.hover.v)
             p.setBrush(fill)
             p.drawRect(text_side)
-        kind = self.property("stripe")
-        if kind == "urgent" and not self.task["done"]:      # urgent shouts: a red wash, a bar at the edge, bolder ink
-            wash = QColor(C["urgent_bg"])
-            wash.setAlphaF(0.75)
-            p.setBrush(wash)
-            p.drawRect(text_side)
-            p.setBrush(QColor(C["urgent"]))
-            p.drawRect(QRectF(0, 0, 3, self.height()))
-        if kind and not self.task["done"]:
-            swipe = self._tone(kind)
-            swipe.setAlphaF((0.34 if theme_dark() else 0.38) if kind == "urgent" else (0.20 if theme_dark() else 0.26))
-            doc = self.title.document()
-            off = QPointF(self.title.viewport().mapTo(self, QPoint(0, 0)))
-            block = doc.begin()
-            while block.isValid():
-                lay = block.layout()
-                top = doc.documentLayout().blockBoundingRect(block).topLeft() + off
-                for i in range(lay.lineCount() if lay is not None else 0):
-                    line = lay.lineAt(i).naturalTextRect()
-                    if line.width() > 0:
-                        paint_swipe(p, line.translated(top), swipe)
-                block = block.next()
-        if self.margin:
-            loud = QFont()
-            loud.setPixelSize(12)
-            loud.setBold(True)
-            for i, (word, kind, _tip) in enumerate(self.margin):
-                p.setFont(loud if kind == "urgent" else serif_font(12))   # upright and bold: it reads before the rest
-                r = QRectF(2, self.MARGIN_TOP + self.MARGIN_LINE * i, ROW_MARGIN - 10, self.MARGIN_LINE)
-                p.setPen(self._tone(kind))
-                p.drawText(r, Qt.AlignRight | Qt.AlignVCenter,
-                           p.fontMetrics().elidedText(word, Qt.ElideRight, int(r.width())))
+        p.setFont(serif_font(self.MARGIN_FONT))
+        for r, word, kind, _tip in self._kind_rects():
+            p.setPen(self._tone(kind))
+            p.drawText(r, Qt.AlignRight | Qt.AlignVCenter, p.fontMetrics().elidedText(word, Qt.ElideRight, int(r.width())))
         if self.task.get("reminder"):
             self._tint_bell()
 
@@ -9768,10 +9861,12 @@ class TaskCard(QFrame):
         m.exec(e.globalPos())
 
     def event(self, e):
-        if e.type() == QEvent.ToolTip and e.pos().x() < ROW_MARGIN:      # a flag word: what that flag means
-            i = int((e.pos().y() - self.MARGIN_TOP) // self.MARGIN_LINE)
-            if 0 <= i < len(self.margin) and e.pos().y() >= self.MARGIN_TOP:
-                QToolTip.showText(e.globalPos(), self.margin[i][2], self)
+        if e.type() == QEvent.ToolTip:          # a flag word, or the red margin: what that flag means
+            tips = [tip for r, _w, _k, tip in self._kind_rects() if r.contains(QPointF(e.pos()))]
+            if not tips and ROW_MARGIN - 8 <= e.pos().x() < ROW_MARGIN + 2 and not self.task["done"]:
+                tips = [tip for _w, k, tip in self.margin if k == "urgent"]
+            if tips:
+                QToolTip.showText(e.globalPos(), tips[0], self)
                 return True
         # Tab on a selected card goes to its Later / Let go buttons (Qt would otherwise move focus away)
         if e.type() == QEvent.KeyPress and self.hasFocus() and e.key() in (Qt.Key_Tab, Qt.Key_Backtab):
@@ -9791,8 +9886,8 @@ class TaskCard(QFrame):
 
     def enterEvent(self, e):
         self.hover.to(1.0)
-        if not self._has_actions:
-            return
+        if not self._has_actions or getattr(self, "_active", False):
+            return                      # editing: the buttons would sit on the text you're typing
         if any(c.pill_in_use() for c in self.panel.live_cards() if c is not self):
             return                      # you're on another note's buttons with the keyboard: leave that one alone
         if QCursor.pos() == self.panel._nav_cursor:
@@ -9808,10 +9903,12 @@ class TaskCard(QFrame):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._fit_margin()              # the title's font is final once it's laid out: realign the margin to it
         if self.actions.isVisible():
             self._place_actions()
 
     def _place_actions(self):
+        """On the row's right end, before the ring, on the title's first line; never on another note."""
         host = self.parentWidget()
         if host is None:
             return
@@ -9820,9 +9917,8 @@ class TaskCard(QFrame):
         self.actions.adjustSize()
         g = self.geometry()
         h = self.actions.height()
-        y = g.bottom() + 5 - h // 2              # centred on the gap under the note
-        y = max(0, min(y, host.height() - h))
-        self.actions.move(g.right() - self.actions.width() - 10, y)
+        y = g.top() + max(0, min(round(self._line_mid() - h / 2), g.height() - h))
+        self.actions.move(g.left() + self.chk.geometry().left() - 6 - self.actions.width(), y)
         self.actions.raise_()
 
     def moveEvent(self, e):
@@ -10235,12 +10331,12 @@ class SendButton(QAbstractButton):
             mark.lineTo(7, -5)
             p.drawPath(mark)
         if fly < 1:
-            # paper plane, pointing right and a little up; on park it flies off up and to the right
+            # paper plane, pointing right; on park it tilts up and flies off to the right
             p.save()
             p.setOpacity(1.0 - fly)
-            p.translate(24 * fly, -10 * fly)
+            p.translate(1.5 + 24 * fly, -10 * fly)         # 1.5: its weight sits left of its tip, so nudge it
             p.scale(1 - 0.35 * fly, 1 - 0.35 * fly)
-            p.rotate(-12 - 10 * fly)
+            p.rotate(-22 * fly)
             plane = QPainterPath()
             plane.moveTo(-9, -8)
             plane.lineTo(10, 0)
@@ -10765,7 +10861,7 @@ class HelpPopup(QFrame):
                                "Mark work finished or open Finished to bring it back."),
             ("Details", "Click a task's title and press Enter, or click the task, to add details."),
             ("Attach", "Paste (Ctrl+V) or drop a photo or file onto a task."),
-            (f"{URGENT_ICON} Urgent", "Really needs doing soon. Urgent thoughts sit at the top, marked in red."),
+            (f"{URGENT_ICON} Urgent", "Really needs doing soon. Urgent thoughts sit at the top, with a red line in the margin."),
             (f"{DIST_ICON} Distraction", "Something from outside broke your focus (a knock, a ping, noise)."),
             (f"{URGE_ICON} Itch", "A pull from inside that feels urgent but can wait. Parked, no guilt."),
             (f"{GLIMMER_ICON} Lift / {ANTI_ICON} drain", "A small good moment / a small moment that put you on edge. "
@@ -11119,14 +11215,15 @@ class CopyButton(QAbstractButton):
 
 
 class ActionPill(QFrame):
-    """The Copy / Later / Let go / Delete pill of a note. It floats on the note's bottom edge, in the gap between
-    notes (it's a child of the list, not of the note), so it never covers the note's text."""
-    FADE = 0
+    """The Copy / Tags / Remind / Done / Later / Let go / Delete buttons of a note. They float on the note's right end
+    (a child of the list, not of the note), on the row's own fill, fading in from the left over a long title."""
+    FADE = 14
 
     def __init__(self, card):
         super().__init__(card)
         self.card = card
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setProperty("keep_tips", True)     # icons: the tip is the name, so it stays after the first week
 
     def leaveEvent(self, e):
         QTimer.singleShot(60, self.card.maybe_hide_pill)
@@ -11150,11 +11247,14 @@ class ActionPill(QFrame):
 
     def paintEvent(self, e):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setBrush(QColor(C["bg"]))
-        p.setPen(QPen(QColor(C["border"]), 1))
-        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        fill = QColor(C["surface_hi"])                         # the lit row's fill: part of the row, not a chip on it
+        fade = QLinearGradient(0, 0, self.FADE, 0)
+        clear = QColor(fill)
+        clear.setAlpha(0)
+        fade.setColorAt(0, clear)
+        fade.setColorAt(1, fill)
+        p.fillRect(QRect(0, 0, self.FADE, self.height()), fade)
+        p.fillRect(self.rect().adjusted(self.FADE, 0, 0, 0), fill)
 
 
 class RoundedWindow(QWidget):
@@ -11833,6 +11933,7 @@ class Panel(RoundedWindow):
             label = QLabel("min", self.idle_box)
             label.setObjectName("unit")
             label.setBuddy(spin)
+            spin.unit = label
             return label
         self.link = LinkToggle()
         self.link.setChecked(bool(self.store.settings.get("auto_break", False)))
@@ -11930,15 +12031,25 @@ class Panel(RoundedWindow):
         self.list = RuledPage()
         self.list.setObjectName("list")
         self.list_lay = QVBoxLayout(self.list)
-        self.list_lay.setContentsMargins(0, 2, 2, 16)   # room for the last note's pill
-        self.list_lay.setSpacing(8)
+        self.list_lay.setContentsMargins(0, 2, 2, 4)
+        self.list_lay.setSpacing(1)
         self.scroll.setWidget(self.list)
-        v.addWidget(self.scroll, 1)
+        self.split = QSplitter(Qt.Vertical)      # drag the line above Later / Completed to give either more room
+        self.split.setObjectName("listSplit")
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(7)
+        self.split.addWidget(self.scroll)
+        self.split.splitterMoved.connect(self._section_dragged)
+        v.addWidget(self.split, 1)
         self._main_pending = []
         self._main_total = 0
         self._main_load_queued = False
         self._main_select_after_load = False
         self._section_batches = []
+        self._section_save = QTimer(self)        # one save after a drag, not one per pixel
+        self._section_save.setSingleShot(True)
+        self._section_save.setInterval(400)
+        self._section_save.timeout.connect(self.store.save)
         self._refreshing_cards = False
         self._render_generation = 0
         # "↓ 3 more": thoughts below the fold are never silently hidden behind the sections
@@ -11955,9 +12066,11 @@ class Panel(RoundedWindow):
         self.sections = QFrame()
         self.sections.setObjectName("sections")
         self.sec_lay = QVBoxLayout(self.sections)
-        self.sec_lay.setContentsMargins(0, 4, 0, 0)
+        self.sec_lay.setContentsMargins(0, 0, 0, 0)
         self.sec_lay.setSpacing(2)
-        v.addWidget(self.sections)
+        self.split.addWidget(self.sections)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 0)
 
         # "Let go" toast with Undo
         # a small pill that floats centred above the bottom of the list (not part of the layout)
@@ -12234,8 +12347,8 @@ class Panel(RoundedWindow):
                 inner = RuledPage()
                 inner.setObjectName("list")
                 il = QVBoxLayout(inner)
-                il.setContentsMargins(0, 0, 2, 16)
-                il.setSpacing(8)
+                il.setContentsMargins(0, 2, 2, 4)
+                il.setSpacing(1)
                 count = max(self.CARD_BATCH, next((i + 1 for i, t in enumerate(items)
                                                   if t["id"] == focus_id), 0)) if focus_id else self.CARD_BATCH
                 state = {"box": box, "layout": il, "pending": list(items[count:]), "cards": [],
@@ -12251,11 +12364,33 @@ class Panel(RoundedWindow):
                 il.addStretch(1)
                 box.setWidget(inner)
                 box.verticalScrollBar().valueChanged.connect(lambda _, s=state: self._section_scrolled(s))
-                box.setMaximumHeight(max(140, int(self.height() * 0.38)))   # the main list keeps most of the room
-                box.setMinimumHeight(min(90, max(60, inner.sizeHint().height())))
+                box.setMinimumHeight(48)
                 self.sec_lay.addWidget(box)
         self.sections.setVisible(bool(later_t or done_t))
+        self._size_sections()
         return focus_card
+
+    SECTION_H = 150      # an open Later / Completed, until you drag the line above it
+
+    def _size_sections(self):
+        """Closed: just the headers, and no line to drag. Open: the height you last dragged it to."""
+        is_open = bool(self._section_batches)
+        handle = self.split.handle(1)
+        handle.setEnabled(is_open)
+        handle.setCursor(Qt.SplitVCursor if is_open else Qt.ArrowCursor)
+        if not is_open:
+            self.sections.setMaximumHeight(self.sections.sizeHint().height())
+            return
+        self.sections.setMaximumHeight(16777215)      # QWIDGETSIZE_MAX
+        total = sum(self.split.sizes()) or self.height() or 600     # not laid out yet: the panel's height
+        h = int(self.store.settings.get("section_h") or min(self.SECTION_H, total * 0.4))
+        h = max(90, min(h, total - 80))
+        self.split.setSizes([total - h, h])
+
+    def _section_dragged(self, *_):
+        if self._section_batches:
+            self.store.settings["section_h"] = self.split.sizes()[1]
+            self._section_save.start()
 
     def _main_cards(self):
         return [self.list_lay.itemAt(i).widget() for i in range(self.list_lay.count())
@@ -12789,7 +12924,7 @@ class Panel(RoundedWindow):
         return False
 
     def _update_more(self):
-        """Pill at the bottom of the list when some thoughts are below the visible area."""
+        """Pill centred at the bottom of the list when some thoughts are below the visible area."""
         vp = self.scroll.viewport()
         bottom = self.scroll.verticalScrollBar().value() + vp.height()
         cards = [self.list_lay.itemAt(i).widget() for i in range(self.list_lay.count())]
@@ -12798,9 +12933,9 @@ class Panel(RoundedWindow):
         if hidden:
             self.more.setText(f"\u2193 {hidden} more")
             self.more.adjustSize()
-            self.more.move(8, vp.height() - self.more.height() - 4)   # left corner: note buttons sit on the right
+            self.more.move((vp.width() - self.more.width()) // 2, vp.height() - self.more.height() - 4)
             if self._pill_over(self.more.geometry()):
-                self.more.hide()                          # still in the way: the buttons win, it comes back after
+                self.more.hide()                          # a note's buttons are there: they win, it comes back after
             else:
                 self.more.show()
                 self.more.raise_()
@@ -12953,9 +13088,9 @@ class Panel(RoundedWindow):
     def _start_from(self, spin, kind):
         """Use exactly what's typed, even if the box still has focus (Start buttons don't take focus).
         The adjacent Focus or Break button is the explicit start action."""
-        spin.interpretText()
+        till = spin.take_till()
         if self.timer:
-            self.timer.start(spin.value(), kind)
+            self.timer.start(till or spin.value(), kind)
 
     def _spin(self, key, default, hi, tip):
         sp = MinSpin()
@@ -12964,7 +13099,8 @@ class Panel(RoundedWindow):
         sp.setRange(0.1, hi)
         sp.setSingleStep(0.5)
         sp.setValue(float(self.store.settings.get(key, default)))
-        sp.setToolTip(tip + ". Type a number (0.5 = 30 seconds), or scroll over it.")
+        sp.setToolTip(tip + ". Type a number (0.5 = 30 seconds), or a time (7 pm, 7:20, 720) to run till then, "
+                      "or scroll over it.")
         sp.setKeyboardTracking(False)
         sp.setButtonSymbols(QDoubleSpinBox.NoButtons)
         sp.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -13541,6 +13677,7 @@ class Panel(RoundedWindow):
         apply_share_privacy(self)
         self.important.update_times()
         super().showEvent(e)
+        QTimer.singleShot(0, self._size_sections)      # Later / Completed sized against the real height
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -14282,7 +14419,7 @@ def bubble_preview(bubble, color=None, shape=None):
 def tour_looks(bubble):
     """Pictures of the real cloud for the tour's scenes: as it is, in a few shapes and colours, and the default."""
     b = bubble
-    return dict(cloud=bubble_preview(b), bubble=b, default=bubble_preview(b, shape="inkcloud"),
+    return dict(cloud=bubble_preview(b), bubble=b, default=bubble_preview(b, color="white", shape="cloud"),
                 shapes=[(CIRCLE_SHAPES[s].split(" (")[0], bubble_preview(b, shape=s))
                         for s in ("circle", "squircle", "hexagon", "speech")],
                 colors=[(CIRCLE_COLORS[c][0], bubble_preview(b, color=c, shape="cloud"))
@@ -16086,6 +16223,8 @@ GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET = google_client(getattr(sys, "_MEIPASS", 
 # drive.appdata (non-sensitive): PTT's own hidden Drive folder, for phone sync later. Asked now so people consent once.
 GOOGLE_CALENDAR_SCOPE = " ".join(("https://www.googleapis.com/auth/calendar.events",
                                   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+                                  # label colors (calendars.get); an older sign-in without it gets colorId colors
+                                  "https://www.googleapis.com/auth/calendar.calendars.readonly",
                                   "https://www.googleapis.com/auth/drive.appdata",
                                   "openid", "email"))
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -16351,6 +16490,7 @@ def calendar_events(rows, now, past_days=0):
                        "event_color": calendar_color(row.get("_event_color"),
                                                      calendar_color(row.get("_calendar_color"))),
                        "series_key": calendar_series_key(identity) if identity else "",
+                       "color_id": str(row.get("colorId") or ""),
                        "event_id": str(row.get("id") or ""),
                        "series_id": str(row.get("recurringEventId") or ""), "original_start": original,
                        "all_day": all_day,
@@ -16386,10 +16526,11 @@ def calendar_ics_color(value):
 
 
 def google_event_color(row, palette, labels, fallback):
-    """Use the event's Google label or legacy color before its calendar color."""
-    label_id = str(row.get("eventLabelId") or "")
-    if label_id:
-        return calendar_color(labels.get(label_id), fallback)
+    """Use the event's Google label, then its legacy color, then its calendar color. A label whose color can't
+    be read (an older sign-in without the calendars scope) falls through to the legacy color."""
+    label = calendar_color(labels.get(str(row.get("eventLabelId") or "")), "")
+    if label:
+        return label
     color_id = str(row.get("colorId") or "")
     shown = next((h for c, _, h in GOOGLE_EVENT_COLORS if c == color_id), None)
     if shown:
@@ -16566,7 +16707,7 @@ def _ics_days(rule, base, horizon):
         day += timedelta(days=1)
 
 
-def calendar_ics_events(content, now, past_days=0):
+def calendar_ics_events(content, now, past_days=0, future_days=14):
     """Read a private Google iCal feed, including recurring instances and changed/cancelled ones."""
     raw_events = _ics_properties(_ics_lines(content))
     changes = {}
@@ -16577,7 +16718,7 @@ def calendar_ics_events(content, now, past_days=0):
             when = _ics_datetime(rid, params)
             if when:
                 changes.setdefault(uid, {})[int(when.timestamp())] = item
-    horizon = now + timedelta(days=14)
+    horizon = now + timedelta(days=future_days)
     results = []
 
     def add(item, start, end, repeat=""):
@@ -16670,6 +16811,7 @@ class GoogleCalendar(QObject):
         self.recent_events = []
         self.all_day = []        # all-day events: only the agenda's day strip shows them
         self.rules = {}          # (calendar id, series id): Google's repeat rule, read once
+        self.reach = 14          # days loaded back and ahead; grows as the full calendar pages further (reach_to)
         self._feed_events = []
         self.calendars = []
         self.status = "Connect Google Calendar to see your next meeting."
@@ -16716,7 +16858,7 @@ class GoogleCalendar(QObject):
         now = datetime.now().astimezone()
         hidden = set(self.store.settings.get("google_calendar_hidden_series") or [])
         return sorted((e for e in self._feed_events if e.get("calendar_id") in enabled and
-                       e["end"] > now and e["start"] <= now + timedelta(days=14) and
+                       e["end"] > now and e["start"] <= now + timedelta(days=self.reach) and
                        e.get("series_key") not in hidden),
                       key=lambda e: (e["start"], e["end"]))
 
@@ -16725,7 +16867,7 @@ class GoogleCalendar(QObject):
         now = datetime.now().astimezone()
         hidden = set(self.store.settings.get("google_calendar_hidden_series") or [])
         return sorted((e for e in self._feed_events if e.get("calendar_id") in enabled and
-                       now - timedelta(days=14) < e["end"] <= now and
+                       now - timedelta(days=self.reach) < e["end"] <= now and
                        e.get("series_key") not in hidden),
                       key=lambda e: (e["start"], e["end"]))
 
@@ -17099,6 +17241,7 @@ class GoogleCalendar(QObject):
         generation = self.generation
         auth = dict(self.store.settings.get("google_calendar_auth") or {})
         selected = self.store.settings.get("google_calendar_selected")
+        reach = self.reach
         self.status = "Updating meetings..."
         self.changed.emit()
 
@@ -17111,7 +17254,8 @@ class GoogleCalendar(QObject):
                         url = calendar_token_blob(item["url"], encrypt=False)
                         content = self._download_feed(url)
                         metadata[item["id"]] = calendar_ics_metadata(content)
-                        for event in calendar_ics_events(content, datetime.now().astimezone(), past_days=14):
+                        for event in calendar_ics_events(content, datetime.now().astimezone(), past_days=reach,
+                                                         future_days=reach):
                             source_color = event.get("event_color")
                             event.update(calendar_id=item["id"], calendar_name=item["name"],
                                          calendar_color=calendar_color(item.get("color")),
@@ -17143,8 +17287,8 @@ class GoogleCalendar(QObject):
                     palette = {}
                 now = datetime.now(timezone.utc)
                 params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": 250,
-                          "timeMin": (now - timedelta(days=14)).isoformat(),
-                          "timeMax": (now + timedelta(days=14)).isoformat()}
+                          "timeMin": (now - timedelta(days=reach)).isoformat(),
+                          "timeMax": (now + timedelta(days=reach)).isoformat()}
                 rows = []
                 for calendar_id in ids:
                     path = "/calendars/" + urllib.parse.quote(calendar_id, safe="") + "/events"
@@ -17176,7 +17320,7 @@ class GoogleCalendar(QObject):
                                 pass        # the card says just "Repeats"; tried again next update
                         row["_rule"] = self.rules.get(series, "")
                         rows.append(row)
-                self._finished.emit((generation, "events", (calendars, calendar_events(rows, now.astimezone(), past_days=14))))
+                self._finished.emit((generation, "events", (calendars, calendar_events(rows, now.astimezone(), past_days=reach))))
             except Exception as exc:
                 self._finished.emit((generation, "error", str(exc)))
         threading.Thread(target=fetch, daemon=True).start()
@@ -17207,15 +17351,21 @@ class GoogleCalendar(QObject):
                 self._finished.emit((0, "added", (False, f"Event not added. {exc} Or reconnect in Settings.", False)))
         threading.Thread(target=post, daemon=True).start()
 
-    def save_event(self, event, event_id, body, method, done):
-        """Send one change in a thread, then reload either way, so a refused change snaps back."""
+    def save_event(self, event, event_id, body, method, done, then=None):
+        """Send one change in a thread (and then `then(url, token)`), then reload either way, so a refused
+        change snaps back."""
         auth = dict(self.store.settings.get("google_calendar_auth") or {})
         url = ("https://www.googleapis.com/calendar/v3/calendars/" + urllib.parse.quote(event["calendar_id"], safe="")
                + "/events/" + urllib.parse.quote(event_id, safe=""))
+        # Google ignores eventLabelId on a write without this flag
+        label = "?eventLabelVersion=1" if body and "eventLabelId" in body else ""
 
         def send():
             try:
-                calendar_json(url, token=calendar_access(auth), body=body, method=method)
+                token = calendar_access(auth)
+                calendar_json(url + label, token=token, body=body, method=method)
+                if then:
+                    then(url, token)
                 self._finished.emit((0, "added", (True, f"Connected. Event {done}.", True)))
             except Exception as exc:
                 self._finished.emit((0, "added", (False, f"Event not {done}. {exc}", True)))
@@ -17300,14 +17450,36 @@ class GoogleCalendar(QObject):
                     e["title"] = title
                 if same(e) and color is not None:
                     e["event_color"] = hex_color or e.get("calendar_color", "")
+                    e["color_id"] = color
                 if same(e) and description is not None:
                     e["details"] = description
         self.events_updated.emit()
-        body = dict({} if title is None else {"summary": title}, **({} if color is None else {"colorId": color or None}))
+        # a Google label outranks colorId, so a new color drops the label or Google keeps showing the old one
+        recolor = {} if color is None else {"colorId": color or None, "eventLabelId": ""}
+        body = dict({} if title is None else {"summary": title}, **recolor)
         if description is not None:
             body["description"] = description
+
+        def recolor_moved(url, token):
+            """Google keeps the old color on events of the series changed on their own (moved, renamed)."""
+            rows = calendar_json(url + "/instances?maxResults=2500&fields=items(id,colorId,eventLabelId)", token=token)
+            for row in (rows or {}).get("items", []):
+                if str(row.get("colorId") or "") != color or row.get("eventLabelId"):
+                    calendar_json(url.rsplit("/", 1)[0] + "/" + urllib.parse.quote(row["id"], safe="") +
+                                  "?eventLabelVersion=1", token=token, body=recolor, method="PATCH")
         self.save_event(event, event_id, None if delete else body,
-                        "DELETE" if delete else "PATCH", "deleted" if delete else "changed")
+                        "DELETE" if delete else "PATCH", "deleted" if delete else "changed",
+                        then=recolor_moved if series and color is not None and not delete else None)
+
+    def reach_to(self, days):
+        """The full calendar shows a day `days` from today: load that far back or ahead too (4 weeks at a time)."""
+        if abs(days) + 3 <= self.reach:
+            return
+        self.reach = 28 * math.ceil((abs(days) + 3) / 28)
+        if self.busy:               # the update on its way loads too little: start again
+            self.generation += 1
+            self.busy = False
+        self.refresh()
 
     def choose_calendars(self, ids):
         self.store.settings["google_calendar_selected"] = list(ids)
@@ -17587,6 +17759,9 @@ def event_when_long(event):
 
 def event_color_id(event):
     """Google's colorId for the event's color, "" for the calendar's own, None when it is neither."""
+    if "color_id" in event:     # Google's own: exact, even when an event color matches the calendar's
+        known = {c for c, _, _ in GOOGLE_EVENT_COLORS}
+        return event["color_id"] if event["color_id"] in known | {""} else None
     shown = event_color(event).lower()
     if shown == calendar_color(event.get("calendar_color")).lower():
         return ""
@@ -17605,7 +17780,7 @@ class DropBox(QComboBox):
         return self.currentText().split(" (")[0] if self.short else self.currentText()
 
     def paintEvent(self, e):
-        if self.short:
+        if self.short and not self.isEditable():
             from PySide6.QtWidgets import QStyle, QStyleOptionComboBox, QStylePainter
             sp = QStylePainter(self)
             opt = QStyleOptionComboBox()
@@ -17628,17 +17803,17 @@ class ColorSquares(QWidget):
     """The calendar's color, then Google's 11, as small squares. Click one (or Tab to it and Space)."""
     picked = Signal(str)
 
-    def __init__(self, base, current="", parent=None):
+    def __init__(self, base, current="", parent=None, size=18):
         super().__init__(parent)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(5)
+        row.setSpacing(5 if size >= 18 else 4)
         self.group = QButtonGroup(self)
         self.buttons = {}
         for color, name, hex_color in (("", "Calendar color", base),) + GOOGLE_EVENT_COLORS:
             b = QToolButton(self)
             b.setCheckable(True)
-            b.setFixedSize(18, 18)
+            b.setFixedSize(size, size)
             b.setToolTip(name)
             b.setAccessibleName(f"Color {name}")
             b.setCursor(Qt.PointingHandCursor)
@@ -17660,6 +17835,126 @@ class ColorSquares(QWidget):
     def value(self):
         """The picked colorId, "" for the calendar's color, None when none is picked."""
         return next((c for c, b in self.buttons.items() if b.isChecked()), None)
+
+
+def span_text(minutes):
+    """45 min, 1 hr, 1 hr 30 min."""
+    hours, mins = divmod(minutes, 60)
+    return f"{mins} min" if not hours else f"{hours} hr" + (f" {mins} min" if mins else "")
+
+
+def parse_span(text):
+    """'90 min', '1h 20m', '1.5 hr', '2 hours' -> minutes, else None."""
+    m = re.fullmatch(r"\s*(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?)?\s*", text.lower())
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    minutes = round(float(m.group(1) or 0) * 60) + int(m.group(2) or 0)
+    return minutes if 0 < minutes < 24 * 60 else None
+
+
+class WhenRow(QWidget):
+    """Day, start and end in one row: pick from the lists (every 15 minutes) or type a time (3:20 pm, 1520). The
+    end also takes a length (1h 20m, 90 min); a time without am or pm is the next one after the start."""
+
+    STEP = 15
+
+    def __init__(self, start, minutes, parent=None):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.day_box, self.start_box, self.end_box = DropBox(self), DropBox(self), DropBox(self, short=True)
+        for box, name in ((self.day_box, "Day"), (self.start_box, "Starts. Pick or type a time"),
+                          (self.end_box, "Ends. Pick, or type a time or a length like 1h 20m")):
+            box.setAccessibleName(name.split(".")[0])
+            box.setToolTip(name)
+            box.setMaxVisibleItems(12)
+        today = datetime.now().date()
+        for d in sorted({today + timedelta(days=i) for i in range(-14, 61)} | {start.date()}):
+            self.day_box.addItem("Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else
+                                 d.strftime("%a, %b %d").replace(" 0", " ") + (f", {d.year}" if d.year != today.year
+                                                                               else ""),
+                                 d.toordinal())   # a date in a combo reads back None
+        self.day_box.setCurrentIndex(self.day_box.findData(start.date().toordinal()))
+        first = start.hour * 60 + start.minute
+        for m in sorted(set(range(0, 24 * 60, self.STEP)) | {first}):
+            self.start_box.addItem(clock_text(datetime(2000, 1, 1, m // 60, m % 60)), m)
+        self.start_box.setCurrentIndex(self.start_box.findData(first))
+        for box in (self.start_box, self.end_box):
+            box.setEditable(True)
+            box.setInsertPolicy(QComboBox.NoInsert)
+            box.setCompleter(None)
+            box.setStyleSheet("QComboBox QLineEdit { border: none; background: transparent; padding: 0; }")
+        self.start_box.lineEdit().editingFinished.connect(self._typed_start)
+        self.end_box.lineEdit().editingFinished.connect(self._typed_end)
+        self.length = minutes
+        self.fill_end()
+        self.start_box.currentIndexChanged.connect(self.fill_end)
+        self.end_box.currentIndexChanged.connect(self._picked_end)
+        self.end_box.activated.connect(self._picked_end)
+        self.end_box.view().setMinimumWidth(self.end_box.view().sizeHintForColumn(0) + 24)   # the list keeps lengths
+        to = QLabel("to", self)
+        to.setObjectName("askDim")
+        row.addWidget(self.day_box, 3)
+        row.addWidget(self.start_box, 2)
+        row.addWidget(to)
+        row.addWidget(self.end_box, 2)
+
+    def fill_end(self):
+        """End times after the start, each with its length, keeping the length you had."""
+        start = self.start_box.currentData()
+        self.end_box.blockSignals(True)
+        self.end_box.clear()
+        for m in sorted(set(range(self.STEP, 12 * 60 + 1, self.STEP)) | {self.length}):
+            at = datetime(2000, 1, 1) + timedelta(minutes=start + m)
+            self.end_box.addItem(f"{clock_text(at)} ({span_text(m)})", m)
+        self.end_box.setCurrentIndex(self.end_box.findData(self.length))
+        self.end_box.blockSignals(False)
+        self.end_box.lineEdit().setText(self.end_box.shown_text())
+
+    def _picked_end(self):
+        self.length = self.end_box.currentData()
+        self.end_box.lineEdit().setText(self.end_box.shown_text())
+
+    def _typed_start(self):
+        """A typed start joins the list; anything else puts the time back."""
+        hm = parse_clock(self.start_box.currentText())
+        if hm is None:
+            self.start_box.setEditText(self.start_box.itemText(self.start_box.currentIndex()))
+            return
+        m = hm[0] * 60 + hm[1]
+        i = self.start_box.findData(m)
+        if i < 0:
+            i = next((k for k in range(self.start_box.count()) if self.start_box.itemData(k) > m),
+                     self.start_box.count())
+            self.start_box.insertItem(i, clock_text(datetime(2000, 1, 1, *hm)), m)
+        self.start_box.setCurrentIndex(i)
+        self.start_box.setEditText(self.start_box.itemText(i))
+
+    def _typed_end(self):
+        """A typed end time or length sets the length; anything else puts the end back."""
+        text = self.end_box.currentText().split(" (")[0]
+        span, hm = parse_span(text), parse_clock(text)
+        if span is None and hm is not None:
+            start = self.start_box.currentData()
+            hours = [hm[0]] if re.search(r"[ap]", text.lower()) or hm[0] >= 12 else [hm[0], hm[0] + 12]
+            gaps = [g for g in ((h * 60 + hm[1] - start) % (24 * 60) for h in hours) if g]
+            span = min(gaps) if gaps else None
+        if span:
+            self.length = span
+        self.fill_end()
+
+    def commit(self):
+        """Take what is typed but not yet left (Enter goes straight to Save)."""
+        self._typed_start()
+        self._typed_end()
+
+    def start(self):
+        d, m = datetime.fromordinal(self.day_box.currentData()), self.start_box.currentData()
+        return datetime(d.year, d.month, d.day, m // 60, m % 60).astimezone()
+
+    def minutes(self):
+        return self.length
 
 
 def call_provider(url):
@@ -17839,7 +18134,12 @@ class EventDetails(QFrame):
         edit_lay.setSpacing(10)
         self.edit_box.hide()
         self.start_color = None
+        self.times = None
         if can_edit:
+            if not event.get("all_day"):
+                self.times = WhenRow(event["start"], max(1, round((event["end"] - event["start"]).total_seconds()
+                                                                  / 60)), self.edit_box)
+                edit_lay.addWidget(self.times)
             self.notes_edit = QPlainTextEdit(event.get("details", ""), self.edit_box)
             self.notes_edit.setObjectName("evNotesEdit")
             self.notes_edit.setPlaceholderText("Add description")
@@ -18054,6 +18354,7 @@ class EventDetails(QFrame):
         self.editing = True
         self.title.hide()
         self.view_lines.hide()
+        self.when.setVisible(self.times is None)     # the time boxes say it
         self.title_edit.show()
         self.edit_box.show()
         self.edit_btn.setEnabled(False)
@@ -18069,6 +18370,12 @@ class EventDetails(QFrame):
         self.edit_box.hide()
         self.title.show()
         self.view_lines.show()
+        self.when.show()
+        if self.times is not None:
+            self.times.deleteLater()               # a fresh one next time, back at the event's own times
+            self.times = WhenRow(self.info["start"], max(1, round((self.info["end"] - self.info["start"])
+                                                                  .total_seconds() / 60)), self.edit_box)
+            self.edit_box.layout().insertWidget(0, self.times)
         self.edit_btn.setEnabled(True)
         if self.start_color is not None:
             self.colors.buttons[self.start_color].setChecked(True)
@@ -18077,7 +18384,8 @@ class EventDetails(QFrame):
         self.setFocus()
 
     def save_edit(self):
-        """One change for the name, notes and color together; nothing changed just leaves edit mode."""
+        """One change for the name, notes and color together, then a move if the day or times changed; nothing
+        changed just leaves edit mode."""
         if not self.editing:                    # Enter reaches both the box and the card: save once
             return
         self.editing = False
@@ -18091,8 +18399,21 @@ class EventDetails(QFrame):
         color = self.colors.value()
         if color is not None and color != self.start_color:
             changes["color"] = color
-        if changes:
-            self.act(lambda: self.grid.change_event(self.info, **changes))
+        moved = None
+        if self.times is not None:
+            self.times.commit()
+            start, length = self.times.start(), self.times.minutes()
+            was = (self.info["start"].replace(second=0, microsecond=0),
+                   max(1, round((self.info["end"] - self.info["start"]).total_seconds() / 60)))
+            if (start, length) != was:
+                moved = (start, start + timedelta(minutes=length))
+        if changes or moved:
+            def send():
+                if changes:
+                    self.grid.change_event(self.info, **changes)
+                if moved:
+                    self.grid.agenda.move_event(self.info, *moved)
+            self.act(send)
         else:
             self.cancel_edit()
 
@@ -18128,6 +18449,15 @@ class EventDetails(QFrame):
         apply_share_privacy(self)
         if not self.hover and not self.testAttribute(Qt.WA_TransparentForMouseEvents):   # hover cards wait
             (self.join_btn or self).setFocus()
+
+    def mousePressEvent(self, event):
+        """A press outside closes the card. On an event you can move, the same press also grabs it, so dragging
+        works without a second click."""
+        grid, at = self.grid, event.globalPosition().toPoint()
+        if (grid is not None and not self.hover and not self.rect().contains(event.position().toPoint())
+                and QApplication.widgetAt(at) is grid and grid.edge_at(grid.mapFromGlobal(at))):
+            self.setAttribute(Qt.WA_NoMouseReplay, False)
+        super().mousePressEvent(event)
 
     def changeEvent(self, event):
         """A hover card you clicked into acts like the clicked card: a click elsewhere closes it."""
@@ -18501,10 +18831,13 @@ class AgendaGrid(QWidget):
         if self.drag:
             self.drag["x"], self.drag["y"], self.drag["global"] = pos.x(), pos.y(), event.globalPosition().toPoint()
             self.drag["moved"] |= (pos - self.drag["press"]).manhattanLength() >= QApplication.startDragDistance()
+            if self.drag["moved"] and self.drag["edge"] == "move":
+                self.setCursor(Qt.ClosedHandCursor)
             self.update()
             return
         n, hit, joining = self.block_at(pos), self.edge_at(pos), self.join_at(pos)
         self.setCursor(Qt.SizeVerCursor if hit and hit[1] != "move" and not joining else
+                       Qt.OpenHandCursor if hit and not joining else
                        Qt.PointingHandCursor if n >= 0 else Qt.ArrowCursor)
         if n != self.hovered:
             self.hovered = n
@@ -18803,10 +19136,8 @@ class AgendaDays(QWidget):
 
 class EventDialog(QDialog):
     """The new event card, top to bottom: the title, the day with start and end times, a description, which
-    calendar, and the color as small squares. Enter in the title adds it; Esc or a click outside cancels. It opens
-    beside the calendar, not over the time you picked."""
-
-    STEP = 15             # minutes between the times offered
+    calendar with the color as small squares beside it. Enter in the title adds it; Esc or a click outside cancels.
+    It opens beside the calendar, not over the time you picked."""
 
     def __init__(self, start, minutes, calendars, chosen="", parent=None):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
@@ -18858,34 +19189,9 @@ class EventDialog(QDialog):
         self.field.setMinimumWidth(340)
         v.addWidget(self.field)
 
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        self.day_box, self.start_box, self.end_box = DropBox(inner), DropBox(inner), DropBox(inner, short=True)
-        for box, name in ((self.day_box, "Day"), (self.start_box, "Starts"), (self.end_box, "Ends")):
-            box.setAccessibleName(name)
-            box.setToolTip(name)
-            box.setMaxVisibleItems(12)
-        today = datetime.now().date()
-        for d in sorted({today + timedelta(days=i) for i in range(30)} | {start.date()}):
-            self.day_box.addItem("Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else
-                                 d.strftime("%a, %b %d").replace(" 0", " "), d.toordinal())   # a date in a combo reads back None
-        self.day_box.setCurrentIndex(self.day_box.findData(start.date().toordinal()))
-        first = start.hour * 60 + start.minute
-        for m in sorted(set(range(0, 24 * 60, self.STEP)) | {first}):
-            self.start_box.addItem(clock_text(datetime(2000, 1, 1, m // 60, m % 60)), m)
-        self.start_box.setCurrentIndex(self.start_box.findData(first))
-        self.length = minutes
-        self.fill_end()
-        self.start_box.currentIndexChanged.connect(self.fill_end)
-        self.end_box.currentIndexChanged.connect(lambda: setattr(self, "length", self.end_box.currentData()))
-        self.end_box.view().setMinimumWidth(self.end_box.view().sizeHintForColumn(0) + 24)   # the list keeps lengths
-        to = QLabel("to", inner)
-        to.setObjectName("askDim")
-        row.addWidget(self.day_box, 3)
-        row.addWidget(self.start_box, 2)
-        row.addWidget(to)
-        row.addWidget(self.end_box, 2)
-        v.addLayout(row)
+        self.when = WhenRow(start, minutes, inner)
+        self.day_box, self.start_box, self.end_box = self.when.day_box, self.when.start_box, self.when.end_box
+        v.addWidget(self.when)
 
         self.notes = QPlainTextEdit(inner)
         self.notes.setPlaceholderText("Add description")
@@ -18901,15 +19207,15 @@ class EventDialog(QDialog):
         self.calendar_box.setCurrentIndex(max(0, self.calendar_box.findData(chosen)))
         self.colors = {cal_id: color for cal_id, _, color in calendars}
         self.calendar_box.setSizeAdjustPolicy(QComboBox.AdjustToContents)      # as wide as its name, not the card
-        self.calendar_box.setMaximumWidth(230)
+        self.calendar_box.setMaximumWidth(170)
         cal_row = QHBoxLayout()
+        cal_row.setSpacing(10)
         cal_row.addWidget(self.calendar_box)
-        cal_row.addStretch(1)
-        v.addLayout(cal_row)
-        self.color_row = ColorSquares(self.colors.get(self.calendar_box.currentData(), C["accent"]), "", inner)
+        self.color_row = ColorSquares(self.colors.get(self.calendar_box.currentData(), C["accent"]), "", inner, 14)
         self.calendar_box.currentIndexChanged.connect(
             lambda: self.color_row.paint("", self.colors.get(self.calendar_box.currentData(), C["accent"])))
-        v.addWidget(self.color_row)
+        cal_row.addWidget(self.color_row, 1)
+        v.addLayout(cal_row)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         self.ok_btn = QPushButton("Add", inner)
@@ -18919,29 +19225,14 @@ class EventDialog(QDialog):
         buttons.addWidget(self.ok_btn)
         v.addLayout(buttons)
 
-    def fill_end(self):
-        """End times after the start, each with its length, keeping the length you had."""
-        start = self.start_box.currentData()
-        self.end_box.blockSignals(True)
-        self.end_box.clear()
-        for m in sorted(set(range(self.STEP, 12 * 60 + 1, self.STEP)) | {self.length}):
-            at = datetime(2000, 1, 1) + timedelta(minutes=start + m)
-            span = f"{m} min" if m < 60 else f"{m / 60:g} hr"
-            self.end_box.addItem(f"{clock_text(at)} ({span})", m)
-        self.end_box.setCurrentIndex(self.end_box.findData(self.length))
-        self.end_box.blockSignals(False)
-
-    def start(self):
-        d, m = datetime.fromordinal(self.day_box.currentData()), self.start_box.currentData()
-        return datetime(d.year, d.month, d.day, m // 60, m % 60).astimezone()
-
     def value(self):
         title = self.field.text().strip()
         if not title:
             return None
+        self.when.commit()
         return {"title": title, "description": self.notes.toPlainText().strip(),
                 "calendar_id": self.calendar_box.currentData() or "primary", "color": self.color_row.value(),
-                "start": self.start(), "minutes": self.end_box.currentData()}
+                "start": self.when.start(), "minutes": self.when.minutes()}
 
     def _save(self):
         if self.value() is None:
@@ -19364,7 +19655,8 @@ class CalendarAgenda(QWidget):
         QTimer.singleShot(4000 if failed else 1500, reset)
 
     def change_days(self, amount):
-        self.day_offset = max(-12, min(12, self.day_offset + amount))
+        self.day_offset = max(-365, min(365, self.day_offset + amount))
+        self.calendar.reach_to(self.day_offset)
         self.refresh_later()
 
     def go_today(self):
@@ -19389,8 +19681,8 @@ class CalendarAgenda(QWidget):
         tail = last.strftime("%d").lstrip("0") if first.month == last.month else last.strftime("%b ") + str(last.day)
         self.range_label.setText(f"{first:%b} {first.day} - {tail}" + (f", {last.year}" if last.year != now.year
                                                                           else ""))
-        self.prev_btn.setEnabled(self.day_offset > -12)
-        self.next_btn.setEnabled(self.day_offset < 12)
+        self.prev_btn.setEnabled(self.day_offset > -365)
+        self.next_btn.setEnabled(self.day_offset < 365)
         self.today_btn.setEnabled(self.day_offset != 0)
         self.days_strip.relayout()
 
@@ -21324,12 +21616,9 @@ class MeetingBadge(QWidget):
         self.source_color.setFixedSize(4, 30)
         self.source_color.setAttribute(Qt.WA_TransparentForMouseEvents)
         row.addWidget(self.source_color, 0, Qt.AlignVCenter)
-        self.enso = EnsoMark(8, inner)      # counts down: fills over the last hour, empties while the event runs
-        self.enso.hide()
-        self.countdown = None
-        row.addWidget(self.enso, 0, Qt.AlignVCenter)
         labels = QVBoxLayout()
         labels.setSpacing(0)
+        labels.addStretch(1)                # the lines sit together, centred
         self.title = QLabel(inner)
         self.title.setObjectName("meetingTitle")
         self.title.setTextFormat(Qt.PlainText)
@@ -21341,6 +21630,7 @@ class MeetingBadge(QWidget):
         self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         labels.addWidget(self.title)
         labels.addWidget(self.detail)
+        labels.addStretch(1)
         row.addLayout(labels, 1)
         buttons = QGridLayout()             # right side: camera over +, or camera and + side by side over Join
         buttons.setSpacing(2)
@@ -21876,11 +22166,8 @@ class MeetingBadge(QWidget):
                                     7,       # the last 6 px resize the bar, so no button sits there
                                     1 if tiny else 2 if compact else 6)
         self.row.setSpacing(2 if tiny else 3 if compact else 6)
-        self.source_color.setFixedSize(3 if compact else 4,
-                                       min(34, max(18, self.height() - (8 if compact else 14))))
-        self.enso.r = 6.0 if compact else 8.0
-        self.enso.setFixedSize(int(2 * self.enso.r + 6), int(2 * self.enso.r + 6))
-        self.enso.setVisible(self.countdown is not None and not tiny)      # no room on the smallest bar
+        self.source_color.setFixedWidth(3 if compact else 4)
+        self._stripe_h = min(34, max(18, self.height() - (8 if compact else 14)))
         m = self.row.contentsMargins()
         side = max(12, min(22, (self.height() - m.top() - m.bottom() - self.buttons.spacing()) // 2))  # two stacked
         font_size = 11 if tiny else 12 if compact else 13
@@ -21894,46 +22181,70 @@ class MeetingBadge(QWidget):
         self.join_btn.ensurePolished()     # as wide as the two buttons above it, and never narrower than its word
         self.join_btn.setFixedSize(max(self.join_btn.fontMetrics().horizontalAdvance("Join") + (8 if tiny else 14),
                                        2 * (side + 6) + self.buttons.horizontalSpacing()), side)
-        self.title.setStyleSheet(f"color: {text}; font-size: {font_size}px; font-weight: 700;")
-        self.detail.setStyleSheet(f"color: {dim}; font-size: {font_size}px;")
+        self._font_size, self._tiny = font_size, tiny
         QTimer.singleShot(0, self._update_title)
 
-    def _set_stripe(self, *colors):
-        """One color, shaded; events at the same time split it into a band of each one's color."""
+    def _set_stripe(self, *colors, upto=1.0):
+        """One color; events at the same time split it into a band of each one's color, the bands only as far
+        down as `upto` (beside the two title lines, not the time line)."""
         tones = [QColor(c) for c in colors]
-        key = ",".join(t.name() for t in tones)
+        key = ",".join(t.name() for t in tones) + f"/{upto:.3f}"
         if getattr(self, "_stripe_color", None) == key:
             return
         self._stripe_color = key
         if len(tones) == 1:
             self.source_color.setStyleSheet(f"QFrame {{ background: {tones[0].name()}; border-radius: 1px; }}")
             return
-        else:
-            n = len(tones)
-            stops = ", ".join(f"stop:{i / n:.3f} {t.name()}, stop:{(i + 1) / n - 0.001:.3f} {t.name()}"
-                              for i, t in enumerate(tones))
+        n = len(tones)
+        stops = ", ".join(f"stop:{i * upto / n:.3f} {t.name()}, stop:{(i + 1) * upto / n - 0.001:.3f} {t.name()}"
+                          for i, t in enumerate(tones))
+        if upto < 1:
+            stops += f", stop:{upto:.3f} transparent, stop:1 transparent"
         self.source_color.setStyleSheet(
-            f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, {stops}); border-radius: 2px; }}")
+            f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, {stops}); border-radius: 1px; }}")
 
     def _update_title(self):
         margins = self.row.contentsMargins()
-        enso = self.enso.width() + self.row.spacing() if self.enso.isVisibleTo(self) else 0
-        width = max(1, self.width() - margins.left() - margins.right() - self.source_color.width() - enso -
+        width = max(1, self.width() - margins.left() - margins.right() - self.source_color.width() -
                     self._buttons_width() - 2 * self.row.spacing() - 2)
         title = (self.current_event["title"] if self.current_event else
                  "Checking calendar..." if self.calendar.busy else
                  ("No upcoming events" if self.width() >= 260 else "No events"))
-        fm = self.title.fontMetrics()
         others = self.overlaps if self.current_event else []
-        if len(others) == 1:                # both names, each cut to a fair share when they don't fit
-            second, sep = others[0]["title"], " & "
-            first = fm.elidedText(title, Qt.ElideRight, max(width // 2, width - fm.horizontalAdvance(sep + second)))
-            text = first + sep + fm.elidedText(second, Qt.ElideRight,
-                                               max(1, width - fm.horizontalAdvance(first + sep)))
+        two = bool(others) and not getattr(self, "_tiny", False)     # events at once: a line each
+        size = getattr(self, "_font_size", 13)
+        room = self.inner.height() - margins.top() - margins.bottom()
+        if two:     # two title lines and the time line must fit the bar's height: a smaller title if needed
+            font = QFont(self.title.font())
+            size -= 1
+            while size > 9:
+                font.setPixelSize(size)
+                small = QFont(font)
+                small.setPixelSize(size - 1)
+                if 2 * QFontMetrics(font).lineSpacing() + QFontMetrics(small).lineSpacing() <= room:
+                    break
+                size -= 1
+        ink, dim = self._inks()
+        for label, style in ((self.title, f"color: {ink}; font-size: {size}px; font-weight: 700;"),
+                             (self.detail, f"color: {dim}; font-size: {size - 1}px;")):   # the time line smaller
+            if label.styleSheet() != style:
+                label.setStyleSheet(style)
+        fm = self.title.fontMetrics()
+        if two:
+            more = f" & {len(others) - 1} more" if len(others) > 1 else ""      # never cut off
+            text = (fm.elidedText(title, Qt.ElideRight, width) + "\n" +
+                    fm.elidedText(others[0]["title"], Qt.ElideRight, max(1, width - fm.horizontalAdvance(more))) + more)
         else:
-            more = f" & {len(others)} more" if others else ""      # never cut off
+            more = f" & {len(others)} more" if others else ""
             text = fm.elidedText(title, Qt.ElideRight, max(1, width - fm.horizontalAdvance(more))) + more
         self.title.setText(text)
+        if two:         # the stripe beside the two title lines: a band of each event's color, one per line
+            line = fm.lineSpacing()
+            block = 2 * line + self.detail.fontMetrics().lineSpacing()
+            self.source_color.setFixedHeight(min(block, room))
+            self._set_stripe(event_color(self.current_event), event_color(others[0]), upto=2 * line / block)
+        else:
+            self.source_color.setFixedHeight(getattr(self, "_stripe_h", 30))
         detail = getattr(self, "_detail_text", "")
         self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.ElideRight, width))
         if self.hover_box.isVisible():
@@ -22033,11 +22344,8 @@ class MeetingBadge(QWidget):
         self.current_event, self.overlaps = bar_events(self.calendar.events, now, pinned)
         if self.current_event:
             e = self.current_event
-            self._set_stripe(*(event_color(x) for x in [e] + self.overlaps[:3]))
-            self.countdown = meeting_countdown(e, now)
-            if self.countdown is not None:
-                self.enso.upto, self.enso.color = self.countdown, event_color(e)
-                self.enso.update()
+            if not self.overlaps or getattr(self, "_tiny", False):      # two lines: _update_title sets it
+                self._set_stripe(*(event_color(x) for x in [e] + self.overlaps[:3]))
             minutes = math.ceil((e["start"] - now).total_seconds() / 60)
             if e.get("all_day"):
                 day = f"{e['start']:%a %b} {e['start'].day}"
@@ -22052,11 +22360,11 @@ class MeetingBadge(QWidget):
             else:
                 detail = f"In {short_span(minutes * 60)} · {e['start']:%a %I:%M %p}".replace(" 0", " ")
             self._detail_text = detail
-            self.join_event = next((x for x in [e] + self.overlaps if x.get("join") and x.get("url")), None)
+            self.join_event = next((x for x in [e] + self.overlaps if x.get("join") and x.get("url") and
+                                    (x["start"] - now).total_seconds() <= 600), None)    # Join from 10 min before
             joinable = self.join_event is not None   # this one's call, else the call of one at the same time
             self._arrange_buttons(joinable)
             self.join_btn.setVisible(joinable)
-            self.enso.setVisible(self.countdown is not None and self.width() >= 160 and self.height() >= 38)
             if joinable:
                 provider = call_provider(self.join_event["url"])
                 self.join_btn.setToolTip(f"Join {self.join_event['title']}" + (f" on {provider}" if provider else ""))
@@ -22074,12 +22382,10 @@ class MeetingBadge(QWidget):
             self.glint.set_active(urgent or preview, meeting_glint_style(self.calendar.store.settings))
         else:
             self._set_stripe(C["dim"])
-            self.countdown = None
             self.join_event = None
             self._detail_text = "Loading next event" if self.calendar.busy else "Calendar is clear for now"
             self._arrange_buttons(False)
             self.join_btn.hide()
-            self.enso.hide()
             self._update_title()
             self.setToolTip("No timed events in the next 14 days.\nClick to open your 3 day calendar. "
                             "Drag to move the bar.")
@@ -22279,9 +22585,10 @@ class UsageList(QWidget):
     """Name, a bar, a value: one row per item (where focus went)."""
     ROW = 24
 
-    def __init__(self, rows, parent=None):
+    def __init__(self, rows, parent=None, fmt=None):
         super().__init__(parent)
-        self.rows = rows                      # [(name, minutes)]
+        self.rows = rows                      # [(name, minutes)], or [(name, n)] with fmt
+        self.fmt = fmt or fmt_minutes
         self.setFixedHeight(self.ROW * len(rows))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -22305,7 +22612,7 @@ class UsageList(QWidget):
             p.setBrush(QColor(C["accent"]) if i == 0 else page_ink(.42))
             p.drawRoundedRect(QRectF(bar_x, y + 9, max(6, bar_w * m / top), 6), 2, 2)
             p.setPen(QColor(C["dim"]))
-            p.drawText(QRectF(w - val_w, y, val_w, self.ROW), Qt.AlignRight | Qt.AlignVCenter, fmt_minutes(m))
+            p.drawText(QRectF(w - val_w, y, val_w, self.ROW), Qt.AlignRight | Qt.AlignVCenter, self.fmt(m))
 
 
 class UsageReport(QWidget):
@@ -22502,12 +22809,30 @@ class UsageReport(QWidget):
                     v.addWidget(self._lab(title, "repDim"))
                     v.addWidget(UsageList(rows, self.body))
 
+        if st["blocks"] or st["marked"]:
+            self._sec(v, "Distracting apps")
+            tiles = [(str(a), label, tip) for a, label, tip in (
+                (st["caught"], "tries to open a blocked app", "Each one was closed for you"),
+                (st["blocks"], f"blocks, {fmt_minutes(st['block_min'])}", ""),
+                (st["let_in"], "times you let an app in", "Pause or Allow during a block"),
+                (st["early"], "blocks stopped early", "")) if a]
+            if st["marked_min"]:
+                tiles.append((fmt_minutes(st["marked_min"]), "of focus in apps you marked distracting",
+                               "Marked on the card at the end of a round"))
+            if tiles:
+                self._tiles(v, tiles, 3, False)
+            for title, rows, fmt in (("Apps you tried to open", st["tried"], lambda n: "once" if n == 1 else f"{n} times"),
+                                     ("Marked distracting, during focus", st["marked"], None)):
+                if rows:
+                    v.addWidget(self._lab(title, "repDim"))
+                    v.addWidget(UsageList(rows, self.body, fmt))
+
         rest = [(str(a), label, tip) for a, label, tip in (
             (st["checkins"], f"check-ins answered of {st['checkins_all']}", "Snoozed and missed ones don't count"),
             (st["reminders"], "reminders rang" + (f", {st['snoozes']} snoozed" if st["snoozes"] else ""), ""),
             (st["breaks"], f"breaks, {fmt_minutes(st['break_min'])}" + (f", {st['stretched']} stretched"
                                                                         if st["stretched"] else ""), ""),
-            (st["caught"], "blocked app tries stopped", ""), (st["photos"], "daily photos", ""),
+            (st["photos"], "daily photos", ""),
             (st["itches"], "itches acted on", "")) if a]
         if rest:
             self._sec(v, "And the rest")
@@ -24552,7 +24877,7 @@ def main():
     display_setting = setting("timer_display", "time")
     bubble.timer_display = display_setting if display_setting in ("ring", "time", "hidden") else "time"
     bubble.ring_style = setting("ring_style", "ember") if setting("ring_style", "ember") in RING_STYLE_KEYS else "ember"
-    bubble.set_look(color=setting("circle_color", "white"), shape=setting("circle_shape", "inkcloud"),
+    bubble.set_look(color=setting("circle_color", "white"), shape=setting("circle_shape", "cloud"),
                     size=setting("circle_size", "medium"))
     THEME["hooks"].append(bubble.update)
     bubble.timer = timer
