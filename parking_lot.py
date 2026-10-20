@@ -85,8 +85,9 @@ LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
 APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
 APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.7.2", "19 Oct 2026", "Tags you can see", ("A picked tag in the list and the quick note is now filled in its colour, so on and off are easy to tell apart.",)),
     ("1.7.1", "19 Oct 2026", "Clearer rows, a richer calendar", ("Flags and reminders sit in the left margin; urgent notes get a red bracket. Full titles, no cut-off.",
                            "Later and Completed sit under a divider you can drag.",
                            "Calendar: drag events to move them, type any start, end or length, page up to a year either way.",
@@ -1471,8 +1472,10 @@ def serif_font(px, italic=True):
 
 
 def page_flag_css(kind, color):
-    """A flag mark on the page: its icon over a short dash in the flag's colour."""
-    return f'QWidget[page="true"] QToolButton#flag[kind="{kind}"] {{ border-bottom: 2px solid {color}; }}'
+    """A flag mark on the page: its icon over a short dash in the flag's colour; when on, solid in that colour."""
+    return (f'QWidget[page="true"] QToolButton#flag[kind="{kind}"] {{ border-bottom: 2px solid {color}; }}'
+            f'QWidget[page="true"] QToolButton#flag[kind="{kind}"]:checked {{ color: {C["bg"]}; background: {color};'
+            f' border-radius: 4px; font-weight: 700; }}')
 
 
 def make_style():
