@@ -1,5 +1,5 @@
 """
-Park That Thought (formerly Parking Lot): a floating capture pad for fleeting thoughts during focus sessions.
+Headroom (formerly Park That Thought, before that Parking Lot): a floating capture pad for fleeting thoughts during focus sessions.
 
 Setup (once):   pip install PySide6 pynput
 Run:            pythonw parking_lot.py      (pythonw = no console window)
@@ -83,10 +83,15 @@ BACKUP_DIR = DATA_DIR / "backups"
 DB_FILE = DATA_DIR / "tasks.json"
 LOG_FILE = DATA_DIR / "error.log"
 # Rescue copy lives OUTSIDE OneDrive, so a locked/synced folder can never lose a save.
-APP_NAME = "Park That Thought"   # display name only; files, folders and IDs keep the old "parking lot" names
-APP_TAGLINE = "Stray thought, file or image? Park it here. Get back to work."
-APP_VERSION = "1.7.2"
+APP_NAME = "Headroom"   # display name only; files, folders and IDs keep the old "parking lot" names
+OLD_APP_NAME = "Park That Thought"   # keep: 1.7.2 and older only take an update that contains this line
+APP_TAGLINE = "Capture thoughts, plan your day, block distractions."
+APP_FEATURES = "Quick notes \u00B7 Tasks \u00B7 Calendar \u00B7 Meeting bar \u00B7 Focus timer \u00B7 App blocker \u00B7 Drop shelf \u00B7 Daily snap \u00B7 Check-ins"
+APP_VERSION = "1.7.3"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.7.3", "23 Oct 2026", "Now called Headroom", ("Park That Thought is now Headroom: it makes room in your head. Your notes and settings stay as they were.",
+                           "The mark by the title is the cloud, drawn as an outline.",
+                           "Hover or select a note: a line opens under it with when you added it, and the buttons never cover the text.")),
     ("1.7.2", "19 Oct 2026", "Tags you can see", ("A picked tag in the list and the quick note is now filled in its colour, so on and off are easy to tell apart.",)),
     ("1.7.1", "19 Oct 2026", "Clearer rows, a richer calendar", ("Flags and reminders sit in the left margin; urgent notes get a red bracket. Full titles, no cut-off.",
                            "Later and Completed sit under a divider you can drag.",
@@ -1495,6 +1500,7 @@ QScrollBar::sub-page:vertical {{ height: 0; background: none; }}
 QLabel {{ color: {C['text']}; background: transparent; }}
 QLabel#hint {{ color: {C['faint']}; font-size: 11px; }}
 QLabel#attachHint {{ color: {C['faint']}; font-size: 11px; padding-left: 2px; }}
+QLabel#addedAt {{ color: {C['faint']}; font-size: 11px; padding-left: 2px; }}
 QLabel#emptyTitle {{ color: {C['text']}; font-size: 15px; font-weight: 600; }}
 QLabel#emptyText {{ color: {C['dim']}; font-size: 12px; }}
 QLabel#chip {{ border-radius: 8px; padding: 0px 7px; font-size: 10px; font-weight: 600; }}
@@ -2204,9 +2210,9 @@ class Store:
 
 
 # ---------------------------------------------------------------- export for AI
-AI_PROMPT = """# Park That Thought export: my parked thoughts
+AI_PROMPT = """# Headroom export: my parked thoughts
 
-I use Park That Thought, a capture-now, decide-later tool. When a thought pulls at me (often during a
+I use Headroom, a capture-now, decide-later tool. When a thought pulls at me (often during a
 focus session), I park it in a couple of seconds and go back to work. Each row below is one parked thought.
 
 Help me know myself. Show me patterns I probably haven't noticed. Don't recite what I recorded: read between
@@ -3146,7 +3152,7 @@ class AnalysesDialog(QDialog):
         text = ""
         if clipboard:
             clip = QGuiApplication.clipboard().text() or ""
-            if clip.strip() and not clip.lstrip().startswith("# Park That Thought export"):
+            if clip.strip() and not clip.lstrip().startswith((f"# {APP_NAME} export", f"# {OLD_APP_NAME} export")):
                 text = clip.strip()
         self._new = {"text": text}
         self.reload()
@@ -6805,7 +6811,7 @@ def paint_inkcloud(p, B, width, upto=1.0, color=None, alpha=1.0):
 
 
 class EnsoMark(QWidget):
-    """A small enso: the mark beside the app title, and on the focus line the time done in its colour."""
+    """A small enso: on the focus line the time done in its colour."""
 
     def __init__(self, r=6.0, parent=None):
         super().__init__(parent)
@@ -6823,6 +6829,29 @@ class EnsoMark(QWidget):
             color = C.get(self.color, self.color)
             paint_enso(p, mid, self.r, w, alpha=0.18)
             paint_enso(p, mid, self.r, w, self.upto, color)
+
+
+class CloudMark(QWidget):
+    """The mark beside the app name: the cloud as an outline in page ink (a head with room), the trailing
+    bubbles filled in the accent. Drawn from cloud_path, read from C at paint time, so it follows the theme."""
+
+    def __init__(self, parent=None, h=20):
+        super().__init__(parent)
+        self.setFixedSize(h + 2, h)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k = (self.height() - 2) / 33.5            # the cloud with its bubbles is about 34.4 x 33.5 body units
+        p.translate(self.width() / 2 + 1.2 * k, self.height() / 2 - 3.65 * k)   # centre that box
+        p.setPen(QPen(QColor(C["text"]), 1.4))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(cloud_path(0, 16 * k, bubbles=False))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(C["accent"]))
+        for dx, dy, r in CLOUD_BUBBLES:
+            p.drawEllipse(QPointF(dx * k, dy * k), r * k, r * k)
 
 
 class SealMark(QWidget):
@@ -7555,8 +7584,11 @@ class Bubble(QWidget):
 
 
 # ---------------------------------------------------------------- the cloud (circle and app icon)
-def cloud_path(c, B):
-    """The thought-cloud outline centred on (c, c) with body radius B."""
+CLOUD_BUBBLES = ((-12, 14.5, 3.0), (-16.5, 18.5, 1.9))   # the thought bubbles trailing off, in body units
+
+
+def cloud_path(c, B, bubbles=True):
+    """The thought-cloud outline centred on (c, c) with body radius B (bubbles=False: the body alone)."""
     path = QPainterPath()
     k = B / 16.0
     path.setFillRule(Qt.WindingFill)
@@ -7565,7 +7597,7 @@ def cloud_path(c, B):
     for dx, dy, r in ((-9.5, 2.5, 5.6), (-4.5, -2.5, 6.4), (2.5, -4.5, 8.6), (10, 1.5, 6.0)):
         path.addEllipse(QPointF(c + dx * k, c + dy * k), r * k, r * k)
     path = path.simplified()
-    for dx, dy, r in ((-12, 14.5, 3.0), (-16.5, 18.5, 1.9)):   # the thought bubbles trailing off
+    for dx, dy, r in CLOUD_BUBBLES if bubbles else ():
         path.addEllipse(QPointF(c + dx * k, c + dy * k), r * k, r * k)
     return path
 
@@ -9330,10 +9362,11 @@ class TaskCard(QFrame):
         self.hover = Ease(self)
         outer.setSpacing(9)
 
-        body = QVBoxLayout()
+        self.body = body = QVBoxLayout()
         body.setSpacing(3)
         body.setContentsMargins(0, 0, 0, 0)
         outer.addLayout(body, 1)
+        self._margin_h = 0              # what the margin words need (see _fit_margin)
 
         self.chk = chk = RoundCheck(task["done"])
         chk.setToolTip("Mark done" if not task["done"] else "Mark not done")
@@ -9424,6 +9457,17 @@ class TaskCard(QFrame):
         self.attach_hint.hide()
         body.addWidget(self.attach_hint)
 
+        # hover or select the note: a line opens under the text with when it was added, the buttons on its right
+        self.added = QLabel()
+        self.added.setObjectName("addedAt")
+        try:
+            at = datetime.fromisoformat(task.get("created") or "")
+            self.added.setText("Added " + at.strftime("%a %b %d, %Y, ").replace(" 0", " ") + clock_text(at))
+        except (ValueError, TypeError):
+            pass
+        self.added.hide()
+        body.addWidget(self.added)
+
         for w in (self.title, self.desc):
             w.installEventFilter(self)
             w.setAcceptDrops(False)
@@ -9495,6 +9539,7 @@ class TaskCard(QFrame):
         self._has_actions = True   # Copy is always there
         self.actions.adjustSize()
         self.actions.hide()
+        self.added.setFixedHeight(self.actions.sizeHint().height())
         chain = [self.title] + [self.fb[k] for k in FLAG_KEYS] + [self.desc]   # hidden flags are skipped by Tab
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
@@ -9565,8 +9610,17 @@ class TaskCard(QFrame):
             rs.resize(min(rs.width(), ROW_MARGIN - 10), rs.height())   # ponytail: clips a too-long time, never spills
             rs.move(ROW_MARGIN - 8 - rs.width(), y)
             y += rs.height()
-        self.setMinimumHeight(y + 6 if y > self._margin_top() else 0)
+        self._margin_h = y + 6 if y > self._margin_top() else 0
+        self.updateGeometry()       # a hint, not setMinimumHeight: that would override the text's own height
         self.update()
+
+    def minimumSizeHint(self):
+        s = super().minimumSizeHint()
+        return QSize(s.width(), max(s.height(), self._margin_h))
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        return QSize(s.width(), max(s.height(), self._margin_h))
 
     def _kind_rects(self):
         """[(rect, word, kind, tip)] for the flag words, one per line, right-aligned against the margin rule."""
@@ -9911,7 +9965,7 @@ class TaskCard(QFrame):
             self._place_actions()
 
     def _place_actions(self):
-        """On the row's right end, before the ring, on the title's first line; never on another note."""
+        """On the row's right end, before the ring, on the line the note grows under its text; never on another note."""
         host = self.parentWidget()
         if host is None:
             return
@@ -9920,9 +9974,14 @@ class TaskCard(QFrame):
         self.actions.adjustSize()
         g = self.geometry()
         h = self.actions.height()
-        y = g.top() + max(0, min(round(self._line_mid() - h / 2), g.height() - h))
+        y = g.top() + max(0, g.height() - self.outer.contentsMargins().bottom() - h)
         self.actions.move(g.left() + self.chk.geometry().left() - 6 - self.actions.width(), y)
         self.actions.raise_()
+
+    def reserve_pill(self, on):
+        """While the buttons show, the note grows a line under its text (when it was added), so they never sit on it."""
+        if self.added.isVisible() != on:
+            self.added.setVisible(on)
 
     def moveEvent(self, e):
         super().moveEvent(e)
@@ -11236,12 +11295,14 @@ class ActionPill(QFrame):
 
     def showEvent(self, e):
         super().showEvent(e)
+        self.card.reserve_pill(True)
         self.card.panel.set_pill_owner(self.card)
         QTimer.singleShot(0, self.card.panel._update_more)     # the "more" pill steps aside for it
 
     def hideEvent(self, e):
         super().hideEvent(e)
         try:
+            self.card.reserve_pill(False)
             if getattr(self.card.panel, "_pill_owner", None) is self.card:
                 self.card.panel.set_pill_owner(None)
             QTimer.singleShot(0, self.card.panel._update_more)
@@ -11725,7 +11786,7 @@ class ImportantWorkShelf(QFrame):
                     hide_button = QToolButton(row)
                     hide_button.setObjectName("workEdit")
                     hide_button.setText("Hide")
-                    hide_button.setToolTip("Hide this event series in PTT. It stays in Google Calendar.")
+                    hide_button.setToolTip(f"Hide this event series in {APP_NAME}. It stays in Google Calendar.")
                     hide_button.setAccessibleName("Hide event series " + event["title"])
                     hide_button.clicked.connect(lambda _=False, e=event: self.calendar.hide_event_series(e))
                     line.addWidget(hide_button)
@@ -11842,7 +11903,7 @@ class Panel(RoundedWindow):
         self.title.setObjectName("appTitle")
         sub = SentenceLabel(APP_TAGLINE)
         sub.setObjectName("appSub")
-        self.mark = EnsoMark(6.5)
+        self.mark = CloudMark()
         tabs_row.addWidget(self.mark, 0, Qt.AlignVCenter)
         tabs_row.addWidget(self.title, 1)
         # grouped: your notes (find, new list) | the focus session (music, block) | about (thoughts, help, settings) | close
@@ -13131,7 +13192,7 @@ class Panel(RoundedWindow):
         box.setWindowTitle(f"About {APP_NAME}")
         box.setStyleSheet(STYLE + f"QMessageBox {{ background: {C['bg']}; }}")
         box.setTextFormat(Qt.RichText)
-        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br><br>{APP_STORY}<br><br>Made by {link(AUTHOR_URL, APP_AUTHOR)}.<br><br>"
+        box.setText(f"<b>{APP_NAME}</b> {APP_VERSION}<br>{APP_TAGLINE}<br>{APP_FEATURES}<br><br>{APP_STORY}<br><br>Made by {link(AUTHOR_URL, APP_AUTHOR)}.<br><br>"
                     f"This app is free. If it helped you, a coffee keeps it going. Thanks! \U0001F49B<br><br>"
                     f"{link(GITHUB_URL, 'GitHub')}<br>{link(COFFEE_URL, 'Buy me a coffee')}<br><br>"
                     f"<span style='color:{C['dim']}'>Thoughts stay local. Calendar and phone alerts are optional. No tracking.</span>")
@@ -15013,7 +15074,7 @@ def scene_patterns(p, t, k):
     paste = _seg(t, 1.6, 2.0)
     if paste > 0:
         _chip(p, QRectF(chat.right() - 232, chat.top() + 30 + 8 * (1 - paste), 218, 28),
-              "\U0001F4C4 Park That Thought export", C["text"], C["accent_soft"], 11, opacity=paste)
+              "\U0001F4C4 Headroom export", C["text"], C["accent_soft"], 11, opacity=paste)
     finds = ("Thoughts start pulling at minute 18", "Best focus 9 to 11 am", "Email itches peak after lunch",
              "Try: 20 min rounds after lunch")
     for i, line in enumerate(finds):
@@ -15537,7 +15598,7 @@ class Onboarding(RoundedWindow):
         self.i = 0
         self.kit = dict(cloud=None, hotkey="", flags=tour_flags())
         self.setObjectName("roundwin")
-        self.setWindowTitle("Welcome to Park That Thought")
+        self.setWindowTitle(f"Welcome to {APP_NAME}")
         self.setWindowIcon(app_icon())
         self.setStyleSheet(self._css())
         THEME["hooks"].append(self._restyle)
@@ -23003,7 +23064,7 @@ class SettingsWindow(QWidget):
     def _set(self, k, v):
         self.ctx.set_setting(k, v)
 
-    def _page(self, title, sub):
+    def _page(self, title, sub, mark=False):
         area = QScrollArea()
         area.setObjectName("page")
         area.setWidgetResizable(True)
@@ -23018,7 +23079,14 @@ class SettingsWindow(QWidget):
         s = QLabel(sub, body)
         s.setObjectName("pageSub")
         s.setWordWrap(True)
-        v.addWidget(t)
+        if mark:                      # About: the cloud outline beside the name, like the list title
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addWidget(CloudMark(body), 0, Qt.AlignVCenter)
+            row.addWidget(t, 1)
+            v.addLayout(row)
+        else:
+            v.addWidget(t)
         v.addWidget(s)
         area.setWidget(body)
         return area, v
@@ -23253,11 +23321,11 @@ class SettingsWindow(QWidget):
         self.calendar_status.setWordWrap(True)
         gl.addWidget(self.calendar_status)
         if not cal.connected:
-            self._row(gl, "Google account", "Sign in once in your browser. PTT sees your calendars "
+            self._row(gl, "Google account", f"Sign in once in your browser. {APP_NAME} sees your calendars "
                       "and adds events you type. Nothing else.",
                       self._button("Connect with Google", cal.connect_google))
         else:
-            self._row(gl, "Events", "PTT checks every five minutes. Google's private feed may update later.",
+            self._row(gl, "Events", f"{APP_NAME} checks every five minutes. Google's private feed may update later.",
                       self._button("Refresh now", cal.refresh))
             email = (self._s("google_calendar_auth", {}) or {}).get("email")
             self._row(gl, "Connection", (f"Signed in as {email}. " if email and not cal.feed_connected else "") +
@@ -23313,7 +23381,7 @@ class SettingsWindow(QWidget):
             hidden_count = len(self._s("google_calendar_hidden_series", []))
             if hidden_count:
                 self._row(v, "Hidden event series",
-                          f"{hidden_count} hidden in PTT. Google Calendar is unchanged.",
+                          f"{hidden_count} hidden in {APP_NAME}. Google Calendar is unchanged.",
                           self._button("Show all", cal.show_hidden_event_series))
         bar_group = self._group(v, "Meeting bar")
         self._toggle(bar_group, "Show bar", "Keep the next event visible. The bar hides during full screen.",
@@ -24196,7 +24264,7 @@ class SettingsWindow(QWidget):
 
     def page_about(self):
         ctx = self.ctx
-        area, v = self._page(APP_NAME, f"Version {APP_VERSION}  \u00B7  {APP_TAGLINE}")
+        area, v = self._page(APP_NAME, f"Version {APP_VERSION}  \u00B7  {APP_TAGLINE}\n{APP_FEATURES}", mark=True)
         web = lambda url: lambda _=False: QDesktopServices.openUrl(QUrl(url))
         gl = self._group(v)
         self._row(gl, f"Made by {APP_AUTHOR}", AUTHOR_URL.split("//")[1].rstrip("/"),
@@ -24330,7 +24398,7 @@ def update_script(path=None, newer_only=False):
         with urllib.request.urlopen(UPDATE_URL, timeout=10) as r:   # ponytail: blocks up to 10 s, it's a restart anyway
             new = r.read()
         if f'APP_NAME = "{APP_NAME}"'.encode() not in new:
-            raise ValueError("download is not Park That Thought")
+            raise ValueError(f"download is not {APP_NAME}")
         compile(new, str(path), "exec")          # never swap in a broken file
         if new == path.read_bytes() or (newer_only and _version(remote_version(new)) <= _version(APP_VERSION)):
             return "current"
@@ -24721,7 +24789,7 @@ def main():
             hard_quit()
         else:
             restarting.clear()
-            toast("Couldn't restart. Quit, then open Park That Thought again.")
+            toast(f"Couldn't restart. Quit, then open {APP_NAME} again.")
 
     def hard_quit():
         QTimer.singleShot(0, app.quit)

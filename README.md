@@ -1,4 +1,10 @@
-# Park That Thought
+# Headroom
+
+**Headroom: capture thoughts, plan your day, block distractions.**
+
+Quick notes · Tasks · Calendar · Meeting bar · Focus timer · App blocker · Drop shelf · Daily snap · Check-ins
+
+(Called Park That Thought until 1.7.3. Your notes and settings carried over.)
 
 **A tiny floating cloud for Windows that catches stray thoughts while you work, so you can stay focused.**
 
@@ -37,7 +43,7 @@ It is not a full task manager. There's no account, no cloud sync and no phone ap
 3. **Windows will most likely show a blue box: "Windows protected your PC".** This is expected. Click **More info**, then **Run anyway**.
 4. A cloud appears on the right edge of your screen. That's it.
 
-No admin rights and no Python needed. It adds Park That Thought to the Start menu, your desktop and startup, so it's there every time you log in. If the cloud ever goes missing, double-click the desktop icon.
+No admin rights and no Python needed. It adds Headroom to the Start menu, your desktop and startup, so it's there every time you log in. If the cloud ever goes missing, double-click the desktop icon.
 
 > **Why the blue box, and is it safe?**
 > Windows shows it for any app that isn't "signed". Signing needs a paid certificate, renewed every year, that small free projects usually skip. It says nothing about what the app does.
@@ -175,7 +181,7 @@ Downloading the installer again from this page and running it works too. Either 
 
 ## Uninstall
 
-Windows Settings > Apps > Installed apps > **Park That Thought** > Uninstall.
+Windows Settings > Apps > Installed apps > **Headroom** > Uninstall.
 
 Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, in case you come back. To remove them too, press `Win+R`, type `%LOCALAPPDATA%\ParkThatThought`, press Enter, and delete that folder (copy `parking_lot_data` somewhere first if you want to keep it).
 
@@ -185,13 +191,13 @@ Your notes stay in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`, in case yo
 
 **Mac or Linux?** Not supported yet. The core runs from source there, but screen-share hiding, focus handling and the quiet rules for check-ins are Windows only.
 
-**Nothing appears after installing.** Open Park That Thought from the Start menu. If still nothing, look in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data\error.log` and [open an issue](https://github.com/gmiqbal/ParkThatThought/issues) with what it says.
+**Nothing appears after installing.** Open Headroom from the Start menu. If still nothing, look in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data\error.log` and [open an issue](https://github.com/gmiqbal/ParkThatThought/issues) with what it says.
 
 **My antivirus flagged it.** Some antivirus apps guess about new, unsigned programs. It's a false alarm; you can check the code yourself. Please [open an issue](https://github.com/gmiqbal/ParkThatThought/issues) with the antivirus name so I can report it to them.
 
 **A hotkey doesn't work.** Another app may use it. Right-click the cloud > Settings > Controls, and pick another.
 
-**Why the name?** "Park that thought" means "hold that thought, we'll come back to it". That's the whole app.
+**Why the name?** Headroom is room in your head: park the thought, let the calendar hold the times, keep distractions out, and there's space left to think.
 
 ## Run from source
 
@@ -210,7 +216,7 @@ The whole app is one file, `parking_lot.py`, with two libraries: PySide6 (Qt) an
 
 ## Support
 
-I build Park That Thought in my spare time and keep it free. If it saves you some focus:
+I build Headroom in my spare time and keep it free. If it saves you some focus:
 
 - [Buy me a coffee](https://buymeacoffee.com/gmiqbal).
 - Star the repo so more people find it.

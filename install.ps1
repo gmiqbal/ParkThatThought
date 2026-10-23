@@ -1,4 +1,4 @@
-# Park That Thought installer for Windows. No admin needed.
+# Headroom installer for Windows. No admin needed.
 # Run:  powershell -c "irm https://raw.githubusercontent.com/gmiqbal/ParkThatThought/main/install.ps1 | Out-String | iex"
 # Running it again updates the app. Your notes (parking_lot_data) are never touched.
 & {
@@ -23,7 +23,7 @@
         }
     }
 
-    Write-Host "Installing Park That Thought into $dir"
+    Write-Host "Installing Headroom into $dir"
     New-Item -ItemType Directory -Force $dir | Out-Null
 
     $py = Find-Python
@@ -68,11 +68,12 @@
     $shell = New-Object -ComObject WScript.Shell
     # the desktop icon also brings the cloud back if it ever goes missing
     foreach ($folder in [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("Desktop")) {
-        $lnk = $shell.CreateShortcut((Join-Path $folder "Park That Thought.lnk"))
+        Remove-Item (Join-Path $folder "Park That Thought.lnk") -ErrorAction SilentlyContinue   # its name before 1.7.3
+        $lnk = $shell.CreateShortcut((Join-Path $folder "Headroom.lnk"))
         $lnk.TargetPath = $vpyw
         $lnk.Arguments = "`"$script`""
         $lnk.WorkingDirectory = $dir
-        $lnk.Description = "Park stray thoughts during focus"
+        $lnk.Description = "Capture thoughts, plan your day, block distractions"
         if (Test-Path $ico) { $lnk.IconLocation = "$ico,0" }
         $lnk.Save()
     }
@@ -82,5 +83,5 @@
     Write-Host ""
     Write-Host "Done. Look for the cloud on the right edge of your screen." -ForegroundColor Green
     Write-Host "Ctrl+Alt+P parks a thought, Ctrl+Alt+L opens the list. It also starts with Windows."
-    Write-Host "Cloud gone? Double-click Park That Thought on your desktop to bring it back."
+    Write-Host "Cloud gone? Double-click Headroom on your desktop to bring it back."
 }
