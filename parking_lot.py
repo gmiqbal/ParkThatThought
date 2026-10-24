@@ -13,6 +13,7 @@ Run:            pythonw parking_lot.py      (pythonw = no console window)
 - Drop files onto a task card = attach (text = appended to details). Drop on empty list = new task.
 - Hover an attachment = copy button. Double-click = open. Right-click = more.
 - Up/down arrows (or Alt+Up / Alt+Down while typing in a task) = reorder.
+- Alt+Right = make a note a step of the one above (Alt+Left = out). Or drag a row by its grip dots (left edge).
 - "urge" = feels urgent, can wait. Parked, no guilt.
 - Tabs = separate lists. "+" makes one (default name = today's date). Double-click a tab to rename,
   right-click to delete, drag to reorder, Ctrl+Tab to switch.
@@ -87,8 +88,11 @@ APP_NAME = "Headroom"   # display name only; files, folders and IDs keep the old
 OLD_APP_NAME = "Park That Thought"   # keep: 1.7.2 and older only take an update that contains this line
 APP_TAGLINE = "Capture thoughts, plan your day, block distractions."
 APP_FEATURES = "Quick notes \u00B7 Tasks \u00B7 Calendar \u00B7 Meeting bar \u00B7 Focus timer \u00B7 App blocker \u00B7 Drop shelf \u00B7 Daily snap \u00B7 Check-ins"
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.8"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.8", "24 Oct 2026", "Steps under a note", ("Hover a note and click + to add steps under it, like a checklist. Enter adds the next one; steps go three levels deep.",
+                           "Alt+Right / Alt+Left, or drag a note by its dots, to make it a step or take it out. A note you move stays where you put it.",
+                           "Checking a note checks its open steps too (Ctrl+Z reopens just those), with a soft tick (Settings: Tick sound).")),
     ("1.7.3", "23 Oct 2026", "Now called Headroom", ("Park That Thought is now Headroom: it makes room in your head. Your notes and settings stay as they were.",
                            "The mark by the title is the cloud, drawn as an outline.",
                            "Hover or select a note: a line opens under it with when you added it, and the buttons never cover the text.")),
@@ -1058,7 +1062,7 @@ C = dict(bg="#17191c", surface="#1a1c1f", surface_hi="#22252a", field="#1c1e22",
          toast="#262a30", toast_border="#3a3e45", undo="#f2b8ab", cream="#f1e6cf", warn="#e8bd62",
          ok_soft="#86c79f", timer="#e66a4f", brk="#5fb8a8", brk_bg="#1d3330", disabled="#44474d",
          rem_fg="#d487cd", rem_bg="#362434", rem_border="#613e5e", rem_hover="#402b3e", glow="#20232a",
-         hint_bg="#24272c", hint_border="#4c5058", accent_hover="#c94d35")
+         hint_bg="#24272c", hint_border="#4c5058", accent_hover="#c94d35", guide="#4d525a")
 DARK = dict(C)
 # Light twin of every key. Two keys share a value in one theme exactly when they share it in the other, and no
 # light value repeats a dark one, so a stylesheet built in either theme can be recoloured by swapping hex codes
@@ -1072,7 +1076,7 @@ LIGHT = dict(DARK, bg="#efebe2", surface="#f7f4ec", surface_hi="#eee9de", field=
              toast="#fffdf8", toast_border="#d9d3c6", undo="#8e2c1f", cream="#6f4a12", warn="#8f5f00",
              ok_soft="#2f7d52", timer="#b5402c", brk="#1d6f63", brk_bg="#ddefeb", disabled="#c4bfb4",
              rem_fg="#873981", rem_bg="#f2e1f1", rem_border="#d9b2d5", rem_hover="#ebd1e8", glow="#fffefb",
-             hint_bg="#fffcf5", hint_border="#cfc8ba", accent_hover="#a03020")
+             hint_bg="#fffcf5", hint_border="#cfc8ba", accent_hover="#a03020", guide="#b9ae99")
 THEME = {"mode": "system", "hooks": []}    # hooks: things that bake a colour outside a stylesheet re-run on a switch
 
 
@@ -1542,7 +1546,7 @@ QToolButton#act[good="true"] {{ color: {C['glimmer']}; }}
 QToolButton#act[good="true"]:hover {{ border: 1px solid {C['glimmer']}; background: {C['glimmer_bg']}; }}
 QToolButton#act[danger="true"] {{ color: {C['faint']}; }}
 QToolButton#act[danger="true"]:hover {{ color: {C['anti']}; border: 1px solid {C['anti']}; background: {C['anti_bg']}; }}
-QToolButton#act[row="true"] {{ border: none; background: transparent; padding: 3px 5px; border-radius: 6px; }}
+QToolButton#act[row="true"] {{ border: none; background: transparent; padding: 3px 4px; border-radius: 6px; }}
 QToolButton#act[row="true"]:hover {{ border: none; background: {C['border']}; }}
 QToolButton#act:focus {{ color: {C['text']}; background: {C['accent']}; border: 1px solid {C['accent']}; }}
 QToolButton#morePill {{ background: {C['surface_hi']}; color: {C['dim']}; border: 1px solid {C['border']};
@@ -1757,6 +1761,16 @@ class Store:
             self.settings["current"] = d["lists"][0]["id"]
         # Existing installations have already learned the app; only brand-new data gets the intro pool.
         self.settings.setdefault("checkin_count", len(FIRST_CHECKINS) if d.get("saved_at") else 0)
+        for l in d["lists"]:                # a step whose parent is gone (or loops back) becomes a top-level note
+            by = {t["id"]: t for t in l["tasks"]}
+            for t in l["tasks"]:
+                seen, p = {t["id"]}, t.get("parent")
+                while p:
+                    if p in seen or p not in by:
+                        t.pop("parent", None)
+                        break
+                    seen.add(p)
+                    p = by[p].get("parent")
 
     # ---- lists (tabs)
     @property
@@ -1777,24 +1791,80 @@ class Store:
             l["tasks"].remove(t)
 
     def move_to_list(self, t, target):
-        """Move a note to another tab (to the top, like a new note). Returns what undo_move_to_list() needs."""
+        """Move a note and its steps to another tab (to the top, like a new note); a step moved on its own
+        becomes a top-level note there. Returns what undo_move_to_list() needs."""
         src = self.list_of(t)
         if src is target:
             return None
-        i = next(k for k, x in enumerate(src["tasks"]) if x is t)
-        src["tasks"].pop(i)
-        target["tasks"].insert(0, t)
         self.log_event("moved_list", t, **{"from": src["name"]})
+        items = self._take(src, self.subtree(t, src["tasks"]))
+        parent = t.pop("parent", None)
+        target["tasks"][0:0] = [x for x, _ in items]
         self.save()
-        return src, i
+        return src, items, parent
 
     def undo_move_to_list(self, t, token):
-        src, i = token
+        src, items, parent = token
         now = self.list_of(t)
-        now["tasks"][:] = [x for x in now["tasks"] if x is not t]
-        src["tasks"].insert(min(i, len(src["tasks"])), t)
+        self._take(now, [x for x, _ in items])
+        self._put_back(src, items)
+        if parent:
+            t["parent"] = parent
         self.log_event("moved_list", t, undo=True, **{"from": now["name"]})
         self.save()
+
+    @staticmethod
+    def _take(l, block):
+        """Pull these notes out of a tab. Returns [(note, index it had)] for _put_back()."""
+        ids = {id(x) for x in block}
+        items = [(x, k) for k, x in enumerate(l["tasks"]) if id(x) in ids]
+        l["tasks"][:] = [x for x in l["tasks"] if id(x) not in ids]
+        return items
+
+    @staticmethod
+    def _put_back(l, items):
+        for x, k in sorted(items, key=lambda i: i[1]):     # rising old indices rebuild the old order
+            l["tasks"].insert(min(k, len(l["tasks"])), x)
+
+    # ---- steps: a note can sit under another note of the same tab ("parent": its id). Steps are full notes;
+    # only their order among siblings matters, so the tab itself stays one flat array.
+    def parent_of(self, t, tasks=None):
+        pid = t.get("parent")
+        if not pid:
+            return None
+        return next((x for x in (tasks if tasks is not None else self.list_of(t)["tasks"]) if x["id"] == pid), None)
+
+    def children(self, t, tasks=None):
+        return [x for x in (tasks if tasks is not None else self.list_of(t)["tasks"]) if x.get("parent") == t["id"]]
+
+    def subtree(self, t, tasks=None):
+        """t and every step under it, parents first, siblings in stored order."""
+        tasks = tasks if tasks is not None else self.list_of(t)["tasks"]
+        out = [t]
+        for c in self.children(t, tasks):
+            out += self.subtree(c, tasks)
+        return out
+
+    def ancestors(self, t, tasks=None):
+        """Parent first, then its parent, up to the top-level note."""
+        tasks = tasks if tasks is not None else self.list_of(t)["tasks"]
+        out, p = [], self.parent_of(t, tasks)
+        while p is not None and len(out) < 8:
+            out.append(p)
+            p = self.parent_of(p, tasks)
+        return out
+
+    def depth(self, t, tasks=None):
+        return len(self.ancestors(t, tasks))
+
+    def height(self, t, tasks=None):
+        """How many levels of steps sit under t (0: none)."""
+        tasks = tasks if tasks is not None else self.list_of(t)["tasks"]
+        return max((1 + self.height(c, tasks) for c in self.children(t, tasks)), default=0)
+
+    def path_text(self, t, tasks=None):
+        """'Main › Sub' for a step (the notes above it), '' for a top-level note."""
+        return " › ".join((p.get("title") or "Untitled") for p in reversed(self.ancestors(t, tasks)))
 
     def set_current(self, list_id):
         self.settings["current"] = list_id
@@ -1828,7 +1898,8 @@ class Store:
 
     def open_count(self):
         """What the circle shows: open thoughts still in play (Later ones are tucked away)."""
-        return sum(1 for l in self.lists for t in l["tasks"] if not t["done"] and not t.get("later"))
+        return sum(1 for l in self.lists for t in l["tasks"]
+                   if not t["done"] and not t.get("later") and not t.get("parent"))
 
     @property
     def tasks(self):
@@ -1987,6 +2058,8 @@ class Store:
     def log_event(self, event, t, ts=None, **extra):
         row = {"ts": ts or datetime.now().isoformat(timespec="seconds"), "event": event, "id": t["id"],
                "title": t["title"], "list": self.list_of(t)["name"]}
+        if t.get("parent"):
+            row["path"] = self.path_text(t)
         row.update(extra)
         line = json.dumps(row, ensure_ascii=False) + "\n"
         for target in (THOUGHT_LOG, RESCUE_DIR / "thought_log.rescue.jsonl"):
@@ -2048,41 +2121,45 @@ class Store:
         """Remove a note without destroying anything: the task goes to a trash log, its files to the trash
         folder, and the thought log records it. kind="let_go": released without action (a fear, a passed itch),
         counted in your patterns. kind="deleted": a mistake or a test note, ignored by the AI export and the
-        session numbers. Returns what undo_let_go() needs."""
+        session numbers. Its steps go with it. Returns what undo_let_go() needs."""
         l = self.list_of(t)
-        idx = l["tasks"].index(t)
-        self.log_event(kind, t, details=t.get("desc", ""), was_later=bool(t.get("later")), was_done=bool(t.get("done")),
-                       **{k: bool(t.get(k)) for k in FLAG_KEYS})
-        try:
-            with open(TRASH_DIR / ("deleted_tasks.jsonl" if kind == "deleted" else "let_go_tasks.jsonl"),
-                      "a", encoding="utf-8") as f:
-                f.write(json.dumps(t, ensure_ascii=False) + "\n")
-        except Exception as e:
-            log_error(f"let-go trash log failed: {e}")
-        moved = None
-        d = ATT_DIR / t["id"]
-        if d.exists():
-            dest = TRASH_DIR / f"{int(time.time())}-{t['id']}"
+        block = self.subtree(t, l["tasks"])
+        moved = {}
+        for x in block:
+            self.log_event(kind, x, details=x.get("desc", ""), was_later=bool(x.get("later")),
+                           was_done=bool(x.get("done")), **{k: bool(x.get(k)) for k in FLAG_KEYS})
             try:
-                shutil.move(str(d), str(dest))
-                moved = dest
+                with open(TRASH_DIR / ("deleted_tasks.jsonl" if kind == "deleted" else "let_go_tasks.jsonl"),
+                          "a", encoding="utf-8") as f:
+                    f.write(json.dumps(x, ensure_ascii=False) + "\n")
             except Exception as e:
-                log_error(f"move to trash failed ({d}): {e}")
-        l["tasks"].remove(t)
+                log_error(f"let-go trash log failed: {e}")
+            d = ATT_DIR / x["id"]
+            if d.exists():
+                dest = TRASH_DIR / f"{int(time.time())}-{x['id']}"
+                try:
+                    shutil.move(str(d), str(dest))
+                    moved[x["id"]] = dest
+                except Exception as e:
+                    log_error(f"move to trash failed ({d}): {e}")
+        items = self._take(l, block)
         self.save()
-        return (l, idx, moved, kind)
+        return (l, items, moved, kind)
 
     def undo_let_go(self, t, token):
-        l, idx, moved, kind = token
-        if moved and moved.exists():
-            try:
-                shutil.move(str(moved), str(ATT_DIR / t["id"]))
-            except Exception as e:
-                log_error(f"undo move failed ({moved}): {e}")
+        l, items, moved, kind = token
+        for x, _ in items:
+            m = moved.get(x["id"])
+            if m and m.exists():
+                try:
+                    shutil.move(str(m), str(ATT_DIR / x["id"]))
+                except Exception as e:
+                    log_error(f"undo move failed ({m}): {e}")
         if l not in self.lists:
             l = self.current()
-        l["tasks"].insert(min(idx, len(l["tasks"])), t)
-        self.log_event("delete_undone" if kind == "deleted" else "let_go_undone", t)
+        self._put_back(l, items)
+        for x, _ in items:
+            self.log_event("delete_undone" if kind == "deleted" else "let_go_undone", x)
         self.save()
 
     def _backfill_log(self):
@@ -2170,13 +2247,15 @@ class Store:
         self.save()
 
     def clear_done(self, reason="cleared"):
-        """Move completed notes to trash. Returns what undo_clear() needs."""
+        """Move completed notes, with their steps, to trash. A done step under an open note stays.
+        Returns what undo_clear() needs."""
         stamp = int(time.time())
         token = []
         l = self.current()
+        old = list(l["tasks"])                      # indices from before anything left, so undo rebuilds the order
+        gone = {x["id"] for t in old if t["done"] and not t.get("parent") for x in self.subtree(t, old)}
         with open(TRASH_DIR / "cleared_tasks.jsonl", "a", encoding="utf-8") as log:
-            for t in [t for t in self.tasks if t["done"]]:
-                idx = l["tasks"].index(t)
+            for idx, t in [(k, t) for k, t in enumerate(old) if t["id"] in gone]:
                 dest = TRASH_DIR / f"{stamp}-{t['id']}"
                 log.write(json.dumps(t, ensure_ascii=False) + "\n")
                 self.log_event(reason, t, details=t.get("desc", ""),
@@ -4212,9 +4291,10 @@ class PhoneSync(QObject):
         elif kind == "done":
             t["done"], t["done_at"] = True, datetime.now().isoformat(timespec="seconds")
             st.log_event("done", t, source="phone")
-            l = st.list_of(t)
-            l["tasks"].remove(t)
-            l["tasks"].append(t)                          # done sinks to the bottom, as in the list
+            if not t.get("parent"):                       # a step stays under its note
+                l = st.list_of(t)
+                l["tasks"].remove(t)
+                l["tasks"].append(t)                      # done sinks to the bottom, as in the list
         elif kind == "letgo":
             st.let_go(t)
         elif kind == "flags":
@@ -4260,7 +4340,8 @@ class MinSpin(QDoubleSpinBox):
         return state
 
     def valueFromText(self, text):
-        self.till = text if till_minutes(text) is not None else ""
+        if not (self.till and text == self.textFromValue(self.value())):   # shown "11:59" keeps the typed "11:59 pm"
+            self.till = text if till_minutes(text) is not None else ""
         if self.unit:
             self.unit.setVisible(not self.till)
         return self.value() if self.till else super().valueFromText(text)
@@ -7753,11 +7834,11 @@ class AttachmentTile(QFrame):
 class RoundCheck(QAbstractButton):
     """Google Tasks style round checkbox."""
 
-    def __init__(self, checked=False):
+    def __init__(self, checked=False, size=20):
         super().__init__()
         self.setCheckable(True)
         self.setChecked(checked)
-        self.setFixedSize(20, 20)
+        self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
         self._hover = False
 
@@ -7772,6 +7853,7 @@ class RoundCheck(QAbstractButton):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        p.scale(self.width() / 20, self.height() / 20)      # drawn on a 20 px grid
         r = QRectF(2, 2, 16, 16)
         if self.isChecked():
             p.setPen(Qt.NoPen)
@@ -8168,6 +8250,44 @@ def reminder_tone_wav(kind):
         wav.setframerate(rate)
         wav.writeframes(samples)
     return output.getvalue()
+
+
+_TICK_WAV = None
+
+
+def check_tick_wav():
+    """Two tiny sine taps, high then a little higher: a soft "done" that doesn't pull your eyes away."""
+    global _TICK_WAV
+    if _TICK_WAV is None:
+        rate = 22050
+        buf = [0.0] * round(rate * 0.12)
+        for f, start, decay in ((1900, 0.005, 0.022), (2500, 0.055, 0.030)):
+            s0, attack = round(start * rate), 0.0015
+            for i in range(round((attack + decay) * rate)):
+                t = i / rate
+                g = 0.07 * (t / attack if t < attack else (0.0005 / 0.07) ** ((t - attack) / decay))
+                if s0 + i < len(buf):
+                    buf[s0 + i] += g * math.sin(2 * math.pi * f * t)
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(b"".join(round(32767 * v).to_bytes(2, "little", signed=True) for v in buf))
+        _TICK_WAV = out.getvalue()
+    return _TICK_WAV
+
+
+def play_check_tick():
+    if not IS_WIN:
+        return
+    def go():
+        try:
+            import winsound
+            winsound.PlaySound(check_tick_wav(), winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+        except Exception:
+            pass
+    threading.Thread(target=go, daemon=True).start()     # SND_MEMORY can't be async, so a thread keeps the UI free
 
 
 def play_reminder_tone(kind):
@@ -8882,12 +9002,15 @@ class LinkTitle(QLabel):
 class ReminderAlert(QDialog):
     """A persistent note card grows from the cloud until dismissed or snoozed."""
 
-    def __init__(self, task, settings, answered, bubble=None, note_actions=False):
+    def __init__(self, task, settings, answered, bubble=None, note_actions=False, paths=None):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.task, self.tasks = task, {task["id"]: task}
         lay = self._shell(task, settings, answered, bubble)
         repeat = repeat_text((task.get("reminder") or {}).get("repeat"))
         self.heading = self._heading(lay, "Note reminder" + (f" · repeats {repeat}" if repeat else ""))
+        path = (paths or {}).get(task["id"])
+        if path:                                # a step: the notes it sits under
+            lay.addWidget(_reminder_path_label(path, self))
         title_row = QHBoxLayout()
         self.open_link = None
         if note_actions:
@@ -9142,11 +9265,21 @@ class ReminderAlert(QDialog):
             self._answer(self.default_snooze)
 
 
+def _reminder_path_label(path, parent):
+    lab = QLabel(path + " ›", parent)
+    lab.setObjectName("stepPath")
+    lab.setTextFormat(Qt.PlainText)
+    lab.setWordWrap(True)
+    lab.setStyleSheet(f"color: {C['faint']}; font-size: 11px;")
+    return lab
+
+
+
 class ReminderGroupAlert(ReminderAlert):
     """Several notes due at once: one card and one ring, a row per note. Answering a row takes just that row
     away; the buttons at the bottom answer every note left. Esc or close snoozes the rest."""
 
-    def __init__(self, tasks, settings, answered, bubble=None, note_actions=False):
+    def __init__(self, tasks, settings, answered, bubble=None, note_actions=False, paths=None):
         QDialog.__init__(self, None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.tasks, self.rows = {t["id"]: t for t in tasks}, {}
         lay = self._shell(tasks[0], settings, answered, bubble)
@@ -9171,7 +9304,14 @@ class ReminderGroupAlert(ReminderAlert):
             f = title.font()
             f.setBold(True)
             title.setFont(f)
-            h.addWidget(title, 1)
+            if (paths or {}).get(t["id"]):      # a step: the notes it sits under, over its title
+                tv = QVBoxLayout()
+                tv.setSpacing(0)
+                tv.addWidget(_reminder_path_label(paths[t["id"]], row))
+                tv.addWidget(title)
+                h.addLayout(tv, 1)
+            else:
+                h.addWidget(title, 1)
             repeats = bool(repeat_text((t.get("reminder") or {}).get("repeat")))
             buttons = ([("Done", "done", "It comes back next time; the note stays open" if repeats else "Tick it off")]
                        if note_actions else [])
@@ -9283,7 +9423,9 @@ class NoteAlarmManager(QObject):
             return
         tasks = [t for _, t in sorted(due, key=lambda d: d[0])]       # earliest first
         args = (self.store.settings, self._answered, self.bubble, bool(self.panel))
-        alert = ReminderAlert(tasks[0], *args) if len(tasks) == 1 else ReminderGroupAlert(tasks, *args)
+        paths = {t["id"]: self.store.path_text(t) for t in tasks if t.get("parent")}
+        alert = (ReminderAlert(tasks[0], *args, paths=paths) if len(tasks) == 1 else
+                 ReminderGroupAlert(tasks, *args, paths=paths))
         for t in tasks:
             self.active[t["id"]] = alert
         alert.show_from_cloud()
@@ -9332,9 +9474,15 @@ class RuledPage(QWidget):
         if not cards:
             return
         p = QPainter(self)
-        rule = QColor(C["border"])
+        rule, guide = QColor(C["border"]), QColor(C["guide"])
         for a, b in zip(cards, cards[1:]):
-            p.fillRect(QRect(0, (a.geometry().bottom() + 1 + b.y()) // 2, self.width(), 1), rule)
+            tr = b.panel._tree.get(b.task["id"]) or {}
+            if tr.get("depth"):             # a step: its note is above it, so the lines carry on through the gap
+                top = a.geometry().bottom() + 1
+                for k in tr["rails"] + [tr["depth"] - 1]:
+                    p.fillRect(QRect(b.x() + TaskCard.guide_x(k), top, 1, b.y() - top), guide)
+            else:
+                p.fillRect(QRect(0, (a.geometry().bottom() + 1 + b.y()) // 2, self.width(), 1), rule)
         top, bottom = cards[0].y(), cards[-1].geometry().bottom() + 1
         p.fillRect(QRect(ROW_MARGIN - 1, top, 1, bottom - top), _blend(C["bg"], C["accent"], 0.22))
         red = QColor(C["urgent"])
@@ -9358,8 +9506,12 @@ class TaskCard(QFrame):
         self.setProperty("done", bool(task["done"]))
         outer = QHBoxLayout(self)
         self.outer = outer
-        outer.setContentsMargins(ROW_MARGIN + 8, 7, 6, 7)
+        tree = panel._tree.get(task["id"]) or {}
+        self.depth = tree.get("depth", 0)
+        pad = 3 if self.depth else 7                # steps sit closer together, under their note
+        outer.setContentsMargins(ROW_MARGIN + 8 + self.depth * self.IND, pad, 6, pad)
         self.hover = Ease(self)
+        self.setMouseTracking(True)     # the grab cursor over the grip zone
         outer.setSpacing(9)
 
         self.body = body = QVBoxLayout()
@@ -9368,10 +9520,10 @@ class TaskCard(QFrame):
         outer.addLayout(body, 1)
         self._margin_h = 0              # what the margin words need (see _fit_margin)
 
-        self.chk = chk = RoundCheck(task["done"])
+        self.chk = chk = RoundCheck(task["done"], 18 if self.depth else 20)
         chk.setToolTip("Mark done" if not task["done"] else "Mark not done")
         chk.toggled.connect(lambda on: panel.set_done(task, on))
-        outer.addWidget(chk, 0, Qt.AlignTop)
+        outer.insertWidget(0, chk, 0, Qt.AlignTop)
         self.margin = []        # (word, kind, tip) per flag on: painted in the margin, in the flag's colour
 
         self.title = AutoText(task["title"], "Untitled", single_line=True)
@@ -9382,7 +9534,29 @@ class TaskCard(QFrame):
             f.setStrikeOut(True)
             self.title.setFont(f)
             self.title.setStyleSheet(f"color: {C['faint']};")
+        if tree.get("crumb"):               # a step found by search: the notes it sits under
+            crumb = QLabel(tree["crumb"] + " ›")
+            crumb.setObjectName("crumb")
+            crumb.setStyleSheet(f"color: {C['faint']}; font-size: 10px;")
+            crumb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # a long path clips, never widens
+            body.addWidget(crumb)
         body.addWidget(self.title)
+        self.fold = None
+        if tree.get("kids"):                # right after the title: hide or show the steps under it
+            self.fold = QToolButton(self.title)
+            self.fold.setObjectName("fold")
+            self.fold.setText("▾" if tree.get("open") else f"▸ {tree['hidden']}")
+            self.fold.setToolTip("Hide or show steps (Ctrl+.)")
+            self.fold.setCursor(Qt.PointingHandCursor)
+            self.fold.setFocusPolicy(Qt.NoFocus)
+            self.fold.setStyleSheet(
+                f"QToolButton#fold {{ color: {C['faint']}; background: transparent; border: none; border-radius: 4px; "
+                f"padding: 0px 3px; font-size: 10px; }} "
+                f"QToolButton#fold:hover {{ color: {C['text']}; background: {C['border']}; }}")
+            self.fold.clicked.connect(lambda: panel.toggle_collapse(task))
+            self.fold.adjustSize()
+            self.title.setViewportMargins(0, 0, self.fold.width() + 4, 0)   # room for it at the end of any line
+            self.title.document().contentsChanged.connect(lambda: QTimer.singleShot(0, self, self._place_fold))
 
         self.reminder_status = QToolButton(self)
         self.reminder_status.setObjectName("reminderStatus")
@@ -9478,13 +9652,21 @@ class TaskCard(QFrame):
         ah = QHBoxLayout(self.actions)
         ah.setContentsMargins(ActionPill.FADE, 0, 2, 0)
         self.destroyed.connect(self.actions.deleteLater)   # it lives in the list, so it goes with the note
-        ah.setSpacing(1)
+        ah.setSpacing(0)
         self.ob = {}
         self.copy_btn = CopyButton()
         self.copy_btn.setToolTip("Copy this note (Ctrl+C while it's selected)")
         self.copy_btn.setFocusPolicy(Qt.NoFocus)   # keyboard: Ctrl+C on a selected note, so Tab still starts at Later
         self.copy_btn.clicked.connect(lambda: self.copy_note())
         ah.addWidget(self.copy_btn)
+        self.step_btn = None
+        if self.depth < Panel.MAX_DEPTH and not task["done"]:
+            self.step_btn = IconAct("plus", C["dim"], C["text"], "Add a step under this note")
+            self.step_btn.setFocusPolicy(Qt.NoFocus)
+            self.step_btn.setProperty("row", True)
+            self.step_btn.installEventFilter(self)
+            self.step_btn.clicked.connect(lambda: panel.step_add(task))
+            ah.addWidget(self.step_btn)
         self.tags_btn = IconAct("tag", C["dim"], C["text"], "Tags: add or remove flags on this note")
         self.tags_btn.setFocusPolicy(Qt.NoFocus)
         self.tags_btn.clicked.connect(self.tags_menu)
@@ -9535,7 +9717,8 @@ class TaskCard(QFrame):
             ah.addWidget(b)
             self.act_btns.append(b)
         if not task["done"]:
-            self.act_btns += [self.tags_btn, self.remind_btn]   # Tab order: Later, Let go, Delete, Tags, Remind
+            self.act_btns += [b for b in (self.step_btn, self.tags_btn, self.remind_btn) if b is not None]
+            # Tab order: Later, Let go, Delete, Step, Tags, Remind
         self._has_actions = True   # Copy is always there
         self.actions.adjustSize()
         self.actions.hide()
@@ -9649,6 +9832,9 @@ class TaskCard(QFrame):
         on = {k: bool(t.get(k)) and live and flag_on(st, k) for k in FLAG_KEYS}
         self.margin = [(FLAG_CHIPS[k][0].split(" ", 1)[-1].split(" · ")[0], FLAG_CHIPS[k][2], FLAG_CHIPS[k][1])
                        for k in FLAG_KEYS if on[k]]
+        tr = self.panel._tree.get(t["id"]) or {}
+        if tr.get("kids") and not tr.get("depth"):
+            self.margin.append((f"{tr['kids_done']} of {tr['kids']}", "steps", "Steps done"))
         self._fit_margin()
         stripe = next((kind for k, kind in (("urgent", "urgent"), ("antiglimmer", "anti"), ("distraction", "dist"),
                                             ("glimmer", "glimmer"), ("urge", "urge"), ("idea", "idea"))
@@ -9698,6 +9884,13 @@ class TaskCard(QFrame):
                 b.blockSignals(False)
         self._apply_flag_look()
         self.panel.update_counts()
+        if key == "urgent" and on and self.task.get("parent"):    # a step moves up once; moving it later sticks
+            ts = self.panel.store.tasks
+            first = next(t for t in ts if t.get("parent") == self.task["parent"])
+            if first is not self.task:
+                ts.remove(self.task)
+                ts.insert(ts.index(first), self.task)
+                self.panel.store.save()
         if key == "urgent":   # urgent tasks sit at the top: re-sort, keeping you on this toggle
             self.panel.refresh_later(self.task["id"], focus_key="urgent" if self.fb["urgent"].hasFocus() else None)
 
@@ -9706,7 +9899,13 @@ class TaskCard(QFrame):
         """What Copy puts on the clipboard: the title, then the details on the next lines (if any)."""
         title = self.task.get("title", "").strip()
         desc = self.task.get("desc", "").strip()
-        return f"{title}\n{desc}" if desc else title
+        text = f"{title}\n{desc}" if desc else title
+        st = self.panel.store
+        base = st.depth(self.task)
+        for s in st.subtree(self.task)[1:]:     # its steps, as a checklist
+            text += "\n" + "  " * (st.depth(s) - base - 1) + ("- [x] " if s["done"] else "- [ ] ") + \
+                (s["title"].strip() or "Untitled")
+        return text
 
     def _files(self):
         st = self.panel.store
@@ -9817,7 +10016,71 @@ class TaskCard(QFrame):
         return self.hasFocus() or any(b.hasFocus() for b in self.act_btns) or self.underMouse()
 
     FLAG_TONE = {"urgent": "urgent", "anti": "anti", "dist": "dist", "glimmer": "glimmer", "urge": "urge",
-                 "idea": "idea"}
+                 "idea": "idea", "steps": "faint"}
+    IND = 24                # how far each level of steps sits in
+
+    @classmethod
+    def guide_x(cls, k):
+        """The tree line of level k runs down the middle of that level's ring."""
+        return ROW_MARGIN + 8 + k * cls.IND + (10 if k == 0 else 9)
+
+    def _place_fold(self):
+        """The hide/show arrow sits just after the title's last word."""
+        try:
+            if not self.fold:
+                return
+            c = self.title.textCursor()
+            c.movePosition(c.MoveOperation.End)
+            r = self.title.cursorRect(c)
+            x = r.right() + 3
+            if not self.title.toPlainText():
+                x = max(x, self.title.fontMetrics().horizontalAdvance(self.title.placeholderText()) + 6)
+            vp = self.title.viewport().geometry()
+            self.fold.move(min(vp.left() + x, self.title.width() - self.fold.width()),
+                           vp.top() + r.center().y() - self.fold.height() // 2 + 1)
+        except RuntimeError:
+            pass
+
+    def _paint_guides(self, p, tr):
+        """Rounded tree lines: the levels above carry on down, this step branches off its note's line with a
+        curved elbow into its ring, and a note with steps showing starts a line under its own ring."""
+        pen = QPen(QColor(C["guide"]), 1)
+        pen.setCapStyle(Qt.FlatCap)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        ring, h, dep = self.chk.geometry(), self.height(), tr.get("depth", 0)
+        ry = ring.top() + ring.height() / 2
+        for k in tr.get("rails", ()):
+            x = self.guide_x(k) + 0.5
+            p.drawLine(QPointF(x, 0), QPointF(x, h))
+        if dep:
+            x, r = self.guide_x(dep - 1) + 0.5, 6
+            path = QPainterPath(QPointF(x, 0))
+            path.lineTo(x, ry - r)
+            path.quadTo(x, ry, x + r, ry)
+            path.lineTo(ring.left(), ry)
+            p.drawPath(path)
+            if not tr.get("last"):
+                p.drawLine(QPointF(x, ry - r), QPointF(x, h))
+        if tr.get("open"):
+            x = self.guide_x(dep) + 0.5
+            p.drawLine(QPointF(x, ring.bottom() + 3), QPointF(x, h))
+
+    def _paint_grip(self, p):
+        """Six dots just right of the margin rule, level with the ring: the handle to drag the note by."""
+        dot = QColor(C["faint"])
+        dot.setAlphaF(self.hover.v)
+        p.setPen(Qt.NoPen)
+        p.setBrush(dot)
+        ring = self.chk.geometry()
+        cy = ring.top() + ring.height() / 2
+        for x in (ROW_MARGIN + 3.5, ROW_MARGIN + 7.5):
+            for dy in (-4, 0, 4):
+                p.drawEllipse(QPointF(x, cy + dy), 1.1, 1.1)
+
+    def _grip_zone(self, x):
+        """Left of the ring on a row of the main list: press here and pull to move the note."""
+        return self.parentWidget() is self.panel.list and x < self.chk.geometry().left()
 
     def _tone(self, kind):
         return QColor(C[self.FLAG_TONE[kind]] if kind in self.FLAG_TONE else FLAG_COLORS.get(kind, C["dim"]))
@@ -9838,6 +10101,11 @@ class TaskCard(QFrame):
             fill.setAlphaF(0.6 * self.hover.v)
             p.setBrush(fill)
             p.drawRect(text_side)
+        tr = self.panel._tree.get(self.task["id"]) or {}
+        if tr.get("depth") or tr.get("open"):
+            self._paint_guides(p, tr)
+        if self.hover.v and self.parentWidget() is self.panel.list:
+            self._paint_grip(p)
         p.setFont(serif_font(self.MARGIN_FONT))
         for r, word, kind, _tip in self._kind_rects():
             p.setPen(self._tone(kind))
@@ -9874,10 +10142,23 @@ class TaskCard(QFrame):
         if k == Qt.Key_Delete:
             self.panel.delete_task(self.task, self)
             return True
+        if k in (Qt.Key_Left, Qt.Key_Right) and mods & Qt.AltModifier:
+            (self.panel.indent if k == Qt.Key_Right else self.panel.outdent)(self.task)
+            return True
+        if k == Qt.Key_Period and mods & Qt.ControlModifier:
+            self._fold_here()
+            return True
         if e.matches(QKeySequence.Copy):
             self.copy_note()
             return True
         return False
+
+    def _fold_here(self):
+        """Ctrl+.: hide or show this note's steps, or (on a step with none) the steps it sits among."""
+        st = self.panel.store
+        t = self.task if st.children(self.task) else st.parent_of(self.task)
+        if t is not None:
+            self.panel.toggle_collapse(t)
 
     def contextMenuEvent(self, e):
         m = QMenu(self)
@@ -9901,6 +10182,18 @@ class TaskCard(QFrame):
                 acted.addAction("Record time spent…", self._record_itch_action)
             if self.task.get("itch_actions"):
                 acted.addAction("Undo last record", self._undo_itch_action)
+        st, t = self.panel.store, self.task
+        m.addSeparator()
+        if self.step_btn is not None:
+            m.addAction("Add step", lambda: self.panel.step_add(t))
+        if not (t["done"] and not t.get("parent")):
+            m.addAction("Make it a step\tAlt+Right", lambda: self.panel.indent(t))
+        if t.get("parent"):
+            m.addAction("Out one level\tAlt+Left", lambda: self.panel.outdent(t))
+        if st.children(t):
+            m.addAction(("Show steps" if t.get("collapsed") else "Hide steps") + "\tCtrl+.",
+                        lambda: self.panel.toggle_collapse(t))
+        m.addSeparator()
         others = [l for l in self.panel.store.lists if l is not self.panel.store.list_of(self.task)]
         if others:
             mv = m.addMenu("Move to")
@@ -9922,6 +10215,8 @@ class TaskCard(QFrame):
             tips = [tip for r, _w, _k, tip in self._kind_rects() if r.contains(QPointF(e.pos()))]
             if not tips and ROW_MARGIN - 8 <= e.pos().x() < ROW_MARGIN + 2 and not self.task["done"]:
                 tips = [tip for _w, k, tip in self.margin if k == "urgent"]
+            if not tips and self._grip_zone(e.pos().x()):
+                tips = ["Drag to move. Pull right to make it a step"]
             if tips:
                 QToolTip.showText(e.globalPos(), tips[0], self)
                 return True
@@ -9936,7 +10231,39 @@ class TaskCard(QFrame):
             return
         super().keyPressEvent(e)
 
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        if e.button() == Qt.LeftButton:
+            self._press, self._dragging = e.position().toPoint(), False
+            e.accept()                  # the row's, not the window's: pulling it moves the note
+
+    def mouseMoveEvent(self, e):
+        press = getattr(self, "_press", None)
+        if press is not None and e.buttons() & Qt.LeftButton:
+            if not self._dragging and (e.position().toPoint() - press).manhattanLength() >= QApplication.startDragDistance():
+                self._dragging = self.panel.drag_start(self)
+                if self._dragging:
+                    self.setCursor(Qt.ClosedHandCursor)
+                else:
+                    self._press = None
+            if self._dragging:
+                self.panel.drag_move(e.globalPosition().toPoint())
+            e.accept()
+            return
+        if not e.buttons():
+            if self._grip_zone(e.position().x()):
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.unsetCursor()
+        super().mouseMoveEvent(e)
+
     def mouseReleaseEvent(self, e):  # click on the note (not its text): select it, like the arrow keys do
+        self._press = None
+        if getattr(self, "_dragging", False):
+            self._dragging = False
+            self.unsetCursor()
+            self.panel.drag_end(True)
+            return
         if e.button() == Qt.LeftButton:
             self.select()
         super().mouseReleaseEvent(e)
@@ -9965,7 +10292,7 @@ class TaskCard(QFrame):
             self._place_actions()
 
     def _place_actions(self):
-        """On the row's right end, before the ring, on the line the note grows under its text; never on another note."""
+        """On the row's right end, on the line the note grows under its text; never on another note."""
         host = self.parentWidget()
         if host is None:
             return
@@ -9975,7 +10302,7 @@ class TaskCard(QFrame):
         g = self.geometry()
         h = self.actions.height()
         y = g.top() + max(0, g.height() - self.outer.contentsMargins().bottom() - h)
-        self.actions.move(g.left() + self.chk.geometry().left() - 6 - self.actions.width(), y)
+        self.actions.move(g.right() - 6 - self.actions.width(), y)
         self.actions.raise_()
 
     def reserve_pill(self, on):
@@ -10025,8 +10352,10 @@ class TaskCard(QFrame):
             self.panel._toast(reminder_confirmation(reminder), ms=4000)
 
     def eventFilter(self, obj, e):
+        if obj is getattr(self, "title", None) and e.type() in (QEvent.Resize, QEvent.Show) and getattr(self, "fold", None):
+            QTimer.singleShot(0, self, self._place_fold)
         if obj in (getattr(self, "title", None), getattr(self, "desc", None)) and e.type() == QEvent.FocusOut:
-            QTimer.singleShot(0, self._consume_inline_reminder)
+            QTimer.singleShot(0, self, self._consume_inline_reminder)
         if obj in getattr(self, "act_btns", []):
             if e.type() == QEvent.ShortcutOverride and e.key() == Qt.Key_Escape:
                 e.accept()
@@ -10054,7 +10383,7 @@ class TaskCard(QFrame):
                     self.select()
                     return self._nav_key(e)
             if e.type() == QEvent.FocusOut:
-                QTimer.singleShot(0, lambda: self.update())
+                QTimer.singleShot(0, self, self.update)
             return False
         if obj in getattr(self, "fb", {}).values():
             flag_focus_hint(obj, e)
@@ -10069,13 +10398,23 @@ class TaskCard(QFrame):
                 self.set_active(False)
                 self.select()
                 return True
+            if (obj is self.title and e.key() in (Qt.Key_Return, Qt.Key_Enter) and self.depth and
+                    not e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier) and not self.panel.is_filtering()):
+                self.panel.step_enter(self)     # the next step, like a checklist
+                return True
             if e.key() in (Qt.Key_Return, Qt.Key_Enter) and e.modifiers() & Qt.ControlModifier:
                 self.panel.done_from_keyboard(self)
+                return True
+            if e.key() in (Qt.Key_Left, Qt.Key_Right) and e.modifiers() & Qt.AltModifier:
+                (self.panel.indent if e.key() == Qt.Key_Right else self.panel.outdent)(self.task, edit=True)
+                return True
+            if e.key() == Qt.Key_Period and e.modifiers() & Qt.ControlModifier:
+                self._fold_here()
                 return True
         if e.type() == QEvent.FocusIn:
             self.set_active(True)
         elif e.type() == QEvent.FocusOut:
-            QTimer.singleShot(0, self._check_active)
+            QTimer.singleShot(0, self, self._check_active)   # tied to the card: a refresh may delete it first
         if e.type() == QEvent.KeyPress:
             if e.matches(QKeySequence.Paste) and self.panel.paste_into(self.task):
                 return True
@@ -10940,6 +11279,9 @@ class HelpPopup(QFrame):
                      "<b>Copy all</b> at the bottom (Ctrl+Shift+C) copies every open note as a list."),
             ("Switch back", "While the list is open it's in Alt+Tab. Coming back puts you on the note you were on. "
                             "Clicking the circle also brings it back."),
+            ("Steps", "Hover a note and click + for a step under it, then Enter for the next one. Alt+\u2192 makes "
+                      "a note a step of the one above, Alt+\u2190 takes it out. Or drag a note by the dots at its left edge, "
+                      "pulling right to make it a step. Ctrl+. hides or shows steps. Three levels at most."),
             ("Files", "Hover a file to copy it, double-click to open, right-click for more."),
             ("Lists", "+ adds one. Double-click to rename, right-click to delete, drag to reorder. "
                       "The first tab is your inbox: quick notes and drops on the circle land there. "
@@ -10947,7 +11289,7 @@ class HelpPopup(QFrame):
             ("Delete", "Delete on hover, the Delete key, or right-click. For mistakes and test notes: kept in trash, "
                        "left out of your patterns. Undo in the toast."),
             ("Keyboard", "Down from the box selects a note. \u2191\u2193 browse, Enter opens, Esc back, Ctrl+Enter done, "
-                         "Tab for Later / Let go, Alt+\u2191\u2193 moves it."),
+                         "Tab for Later / Let go, Alt+\u2191\u2193 moves it, Alt+\u2190\u2192 steps it in or out."),
             ("Resize", "Drag the left, right or bottom edge, or the dotted corner."),
             ("Timer &amp; settings", "Right-click the circle."),
         ]
@@ -11279,7 +11621,7 @@ class CopyButton(QAbstractButton):
 class ActionPill(QFrame):
     """The Copy / Tags / Remind / Done / Later / Let go / Delete buttons of a note. They float on the note's right end
     (a child of the list, not of the note), on the row's own fill, fading in from the left over a long title."""
-    FADE = 14
+    FADE = 10
 
     def __init__(self, card):
         super().__init__(card)
@@ -12219,7 +12561,7 @@ class Panel(RoundedWindow):
     def refresh_tab_counts(self):
         for i, l in enumerate(self.store.lists):
             if i < self.tabs.count():
-                n = sum(1 for t in l["tasks"] if not t["done"])
+                n = sum(1 for t in l["tasks"] if not t["done"] and not t.get("parent"))
                 self.tabs.setTabText(i, l["name"])
                 self.tabs.setTabToolTip(i, "Inbox: quick notes and drops on the circle land in the first tab. "
                                            "Drag another tab here to change it." if i == 0 else "")
@@ -12290,7 +12632,7 @@ class Panel(RoundedWindow):
         m.exec(self.tabs.mapToGlobal(pos))
 
     def _delete_list(self, l):
-        open_n = sum(1 for t in l["tasks"] if not t["done"])
+        open_n = sum(1 for t in l["tasks"] if not t["done"] and not t.get("parent"))
         if open_n and QMessageBox.question(
                 self, "Delete list", f"'{l['name']}' has {open_n} open task(s). Move them to trash?") != QMessageBox.Yes:
             return
@@ -12303,6 +12645,7 @@ class Panel(RoundedWindow):
         QTimer.singleShot(0, lambda: self.refresh(focus_id, focus_details, focus_key, select))
 
     def refresh(self, focus_id=None, focus_details=False, focus_key=None, select=False):
+        self.drag_end(False)                    # the rows being dragged are about to go: drop nothing, clean up
         self._refreshing_cards = True
         self._render_generation += 1
         pos = self.scroll.verticalScrollBar().value()
@@ -12318,11 +12661,9 @@ class Panel(RoundedWindow):
                 if w:
                     w.hide()
                     w.deleteLater()
-        tasks = self.store.tasks
-        open_t = [t for t in tasks if not t["done"]]
+        self._tree = {}
         active = self.open_in_order()
-        later_t = [t for t in open_t if t.get("later")]
-        done_t = [t for t in tasks if t["done"]]
+        later_t, done_t = self.later_in_order(), self.done_in_order()
         filtering = self.is_filtering()
         if filtering:                       # one flat list of matches; the Later / Completed sections step aside
             active = self.filtered_tasks()
@@ -12391,7 +12732,7 @@ class Panel(RoundedWindow):
             hl.setContentsMargins(2, 0, 0, 0)
             sec = QToolButton()
             sec.setObjectName("section")
-            sec.setText(("\u25BE " if show else "\u25B8 ") + f"{title} ({len(items)})")
+            sec.setText(("\u25BE " if show else "\u25B8 ") + f"{title} ({sum(1 for t in items if not t.get('parent'))})")
             sec.setToolTip("Show" if not show else "Hide")
             sec.clicked.connect(lambda _=False, k=key: self._toggle_section(k))
             hl.addWidget(sec)
@@ -12542,17 +12883,15 @@ class Panel(RoundedWindow):
         if self.is_filtering() or self._main_pending or any(s["pending"] for s in self._section_batches):
             return False
         main = self._main_cards()
-        card = next((c for c in main if c.task is task), None)
-        if card is None or len(main) == 1:
-            return False
-        self.list_lay.removeWidget(card)
-        card.hide()
-        card.deleteLater()
-        main.remove(card)
-        tasks = self.store.tasks
-        later_t = [t for t in tasks if not t["done"] and t.get("later")]
-        done_t = [t for t in tasks if t["done"]]
-        self._build_sections(later_t, done_t)
+        gone = self._cards_of(task, main)
+        if not gone or len(gone) == len(main) or self._tree.get(task["id"], {}).get("depth"):
+            return False                      # a step: its note's lines and "n of m" change, so rebuild
+        for card in gone:
+            self.list_lay.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+            main.remove(card)
+        self._build_sections(self.later_in_order(), self.done_in_order())
         section_cards = [c for c in self.sections.findChildren(TaskCard) if self._alive(c)]
         self._nav_cards = main + section_cards
         pending = getattr(self, "_pending_select", None)
@@ -12627,13 +12966,15 @@ class Panel(RoundedWindow):
         instead of jumping; then fast_remove() takes the card out. pause_ms lets a tick show first (Done).
         Never runs inside the card's own click handler (zero-delay timer at least)."""
         def go():
-            card = next((c for c in self._main_cards() if c.task is task), None)
-            if card is None or self.is_filtering() or not self.isVisible():
+            cards = self._cards_of(task, self._main_cards())
+            if not cards or self.is_filtering() or not self.isVisible():
                 None if self.fast_remove(task) else self.refresh()
                 return
             if kind:
-                self._ghost(card, kind)
-            self._animate_card(card, out=True, done=lambda: None if self.fast_remove(task) else self.refresh(),
+                self._ghost(cards[0], kind)
+            for c in cards[1:]:                     # its steps fold away with it
+                self._animate_card(c, out=True)
+            self._animate_card(cards[0], out=True, done=lambda: None if self.fast_remove(task) else self.refresh(),
                                hide_now=bool(kind))
         QTimer.singleShot(pause_ms, go)
 
@@ -12703,8 +13044,59 @@ class Panel(RoundedWindow):
 
     def open_in_order(self):
         """Open notes of the current list as shown: urgent first, then the Sort setting (default: stored order,
-        newest on top)."""
-        return self.sorted_notes(t for t in self.store.tasks if not t["done"] and not t.get("later"))
+        newest on top), each followed by its steps."""
+        return self._walk(self.sorted_notes(t for t in self.store.tasks
+                                            if not t["done"] and not t.get("later") and not t.get("parent")))
+
+    def later_in_order(self):
+        return self._walk([t for t in self.store.tasks if t.get("later") and not t["done"] and not t.get("parent")])
+
+    def done_in_order(self):
+        return self._walk([t for t in self.store.tasks if t["done"] and not t.get("parent")])
+
+    _tree = {}      # note id -> how its row sits in the tree (depth, lines to draw, steps done), set by _walk()
+
+    def _walk(self, tops):
+        """Each note, then its steps in stored order (theirs under them), skipping the steps of a hidden one."""
+        kids, out = {}, []
+        for t in self.store.tasks:
+            if t.get("parent"):
+                kids.setdefault(t["parent"], []).append(t)
+
+        def count(t):
+            return sum(1 + count(c) for c in kids.get(t["id"], []))
+
+        def visit(t, depth, lasts, up):
+            ch = kids.get(t["id"], [])
+            shown = [] if t.get("collapsed") else ch
+            self._tree[t["id"]] = {"depth": depth, "rails": [k for k in range(depth - 1) if not lasts[k]],
+                                   "last": bool(lasts and lasts[-1]), "kids": len(ch),
+                                   "kids_done": sum(1 for c in ch if c["done"]), "hidden": 0 if shown else count(t),
+                                   "open": bool(shown), "up": up, "crumb": ""}
+            out.append(t)
+            for i, c in enumerate(shown):
+                visit(c, depth + 1, lasts + [i == len(shown) - 1], up + [t["id"]])
+        for t in tops:
+            visit(t, 0, [], [])
+        return out
+
+    def toggle_collapse(self, task):
+        """Hide or show the steps under a note (Ctrl+. or the arrow after its title). Remembered on the note."""
+        if not self.store.children(task):
+            return
+        on = not task.get("collapsed")
+        if on:
+            task["collapsed"] = True
+        else:
+            task.pop("collapsed", None)
+        self.store.log_event("collapsed" if on else "expanded", task)
+        self.store.save()
+        self.refresh_later(task["id"], select=True)
+
+    def _cards_of(self, task, cards):
+        """The note's card first, then the cards of the steps under it."""
+        return ([c for c in cards if c.task is task] +
+                [c for c in cards if task["id"] in self._tree.get(c.task["id"], {}).get("up", ())])
 
     # ---- search, filter, sort
     NO_FILTER = {"flags": [], "show": "active", "days": None}   # search defaults to Open and Later
@@ -12732,6 +13124,10 @@ class Panel(RoundedWindow):
             if q and q not in (t.get("title", "") + "\n" + t.get("desc", "")).lower():
                 continue
             out.append(t)
+        tasks = self.store.tasks
+        for t in out:
+            self._tree[t["id"]] = {"depth": 0, "rails": [], "last": False, "kids": 0, "kids_done": 0, "hidden": 0,
+                                   "open": False, "up": [], "crumb": self.store.path_text(t, tasks)}
         return self.sorted_notes(out)
 
     def toggle_search(self, show=None):
@@ -12885,10 +13281,16 @@ class Panel(RoundedWindow):
     def open_notes_text(self):
         """Copy the notes shown by search/filter, or all open notes when neither is active."""
         lines = []
-        notes = self.filtered_tasks() if self.is_filtering() else self.open_in_order()
+        st = self.store
+        if self.is_filtering():
+            notes = self.filtered_tasks()
+        else:       # every step, hidden ones too
+            notes = [s for t in self.open_in_order() if not t.get("parent") for s in st.subtree(t)]
         for t in notes:
-            lines.append(f"- {t['title'].strip() or 'Untitled'}")
-            lines += [f"  - {d.strip()}" for d in t.get("desc", "").splitlines() if d.strip()]
+            dep = 0 if self.is_filtering() else st.depth(t)
+            box = ("[x] " if t["done"] else "[ ] ") if dep else ""
+            lines.append("  " * dep + f"- {box}{t['title'].strip() or 'Untitled'}")
+            lines += ["  " * (dep + 1) + f"- {d.strip()}" for d in t.get("desc", "").splitlines() if d.strip()]
         return "\n".join(lines)
 
     def copy_all(self):
@@ -12958,7 +13360,7 @@ class Panel(RoundedWindow):
         self.refresh_later()
 
     def clear_completed(self):
-        n = sum(1 for t in self.store.tasks if t["done"])
+        n = sum(1 for t in self.store.tasks if t["done"] and not t.get("parent"))
         token = self.store.clear_done()
         self.refresh_later()
 
@@ -13014,11 +13416,14 @@ class Panel(RoundedWindow):
         if kb is not None:
             self._pending_select = cards.index(kb)
         task["later"] = bool(on)
+        parent = task.pop("parent", None) if on else None     # a step put off for later leaves its note
         self.store.log_event("later_on" if on else "later_off", task)
         self.store.save()
         self.remove_later(task, kind="later") if on else self.refresh_later()
 
         def undo():
+            if parent:
+                task["parent"] = parent
             task["later"] = not on
             self.store.log_event("later_off" if on else "later_on", task, undo=True)
             self.store.save()
@@ -13455,17 +13860,240 @@ class Panel(RoundedWindow):
             if self.store.settings.get("close_on_outside", False):
                 force_foreground(self)    # a drop counts as using the list: keep it, until the next outside click
 
-    def move_task(self, task, delta, keep_selected=False):
-        """Alt+Up/Down: swap with the neighbour you see above/below it. Urgent tasks stay above the rest."""
-        if task["done"]:
-            return
+    MAX_DEPTH = 2           # a note, its steps, their steps: three levels
+
+    def _can_move(self):
         if self.store.settings.get("sort", "manual") != "manual" or self.is_filtering():
             self._toast("Moving works in My order with no search or filter", ms=3000)
+            return False
+        return True
+
+    def place(self, task, par, before=None, after=None, edit=False):
+        """Move a note and every step under it: under par (None: top level), just before or after a sibling,
+        else at the end of par's steps. Logged, and Ctrl+Z puts it back."""
+        st, ts = self.store, self.store.tasks
+        old_ids = [x["id"] for x in ts]
+        old_parent, old_later = task.get("parent"), task.get("later")
+        old_from = st.path_text(task)
+        root = (st.ancestors(task) or [task])[-1]
+        was_later = bool(root.get("later"))
+        par_collapsed = bool(par and par.get("collapsed"))
+        block = st.subtree(task)
+        ids = {x["id"] for x in block}
+        rest = [x for x in ts if x["id"] not in ids]
+        if before is not None:
+            at = rest.index(before)
+        elif after is not None:
+            at = rest.index(after) + 1
+        elif par is not None:
+            at = rest.index(st.subtree(par, rest)[-1]) + 1
+        else:
+            at = len(rest)
+        ts[:] = rest[:at] + block + rest[at:]
+        if par is not None:
+            task["parent"] = par["id"]
+            task.pop("later", None)
+            par.pop("collapsed", None)          # you just put something there: show it
+        else:
+            task.pop("parent", None)
+            if was_later:
+                task["later"] = True
+        if [x["id"] for x in ts] == old_ids and task.get("parent") == old_parent:
+            return
+        if par is not None and par["id"] != old_parent:
+            st.log_event("nested", task, steps=len(block) - 1)
+        elif par is None and old_parent:
+            st.log_event("unnested", task, steps=len(block) - 1, **{"from": old_from})
+        else:
+            st.log_event("moved", task, steps=len(block) - 1)
+        st.save()
+
+        def undo():
+            pos = {i: k for k, i in enumerate(old_ids)}
+            ts.sort(key=lambda x: pos.get(x["id"], -1))
+            for k, v in (("parent", old_parent), ("later", old_later)):
+                if v:
+                    task[k] = v
+                else:
+                    task.pop(k, None)
+            if par_collapsed:
+                par["collapsed"] = True
+            st.log_event("moved", task, undo=True)
+            st.save()
+            self.refresh_later(task["id"], select=True)
+        self._push_undo("Moved", undo, toast=False)
+        self.refresh_later(task["id"], select=not edit)
+        if edit:                                # keep typing where you were
+            def reopen():
+                c = next((c for c in self._nav_cards if c.task is task), None)
+                if c is not None:
+                    c.open_editing()
+            QTimer.singleShot(0, lambda: QTimer.singleShot(0, reopen))
+
+    def _siblings(self, task):
+        """The notes at its level, in the order you see them."""
+        st = self.store
+        if task.get("parent"):
+            return st.children(st.parent_of(task))
+        if task.get("later"):
+            return [t for t in st.tasks if t.get("later") and not t["done"] and not t.get("parent")]
+        return self.sorted_notes(t for t in st.tasks if not t["done"] and not t.get("later") and not t.get("parent"))
+
+    def indent(self, task, edit=False):
+        """Alt+Right: make it a step of the note above it (its own steps come along)."""
+        if (task["done"] and not task.get("parent")) or not self._can_move():
+            return
+        sib = self._siblings(task)
+        k = sib.index(task) if task in sib else 0
+        if k == 0:
+            return
+        prev = sib[k - 1]
+        if self.store.depth(prev) + 1 + self.store.height(task) > self.MAX_DEPTH:
+            self._toast("Steps go three levels deep at most", ms=3000)
+            return
+        self.place(task, prev, edit=edit)
+
+    def outdent(self, task, edit=False):
+        """Alt+Left: out one level, just under the note it was in."""
+        par = self.store.parent_of(task)
+        if par is None or not self._can_move():
+            return
+        self.place(task, self.store.parent_of(par), after=par, edit=edit)
+
+    def step_add(self, parent, after=None):
+        """A new empty step under the note (after a given step, else at the end), ready to type."""
+        st = self.store
+        if parent["done"] or st.depth(parent) >= self.MAX_DEPTH:
+            return
+        t = st.new_task("", source="step", log=False)
+        ts = st.list_of(t)["tasks"]
+        ts.remove(t)
+        t["parent"] = parent["id"]
+        anchor = st.subtree(after, ts)[-1] if after is not None else st.subtree(parent, ts)[-1]
+        ts.insert(ts.index(anchor) + 1, t)
+        parent.pop("collapsed", None)
+        st.log_captured(t)
+        st.save()
+        self.refresh_later(t["id"])
+
+    def step_enter(self, card):
+        """Enter on a step's title: the next step. Enter on an empty one: done adding, back on the note."""
+        t, st = card.task, self.store
+        par = st.parent_of(t)
+        if par is None:
+            return
+        if not (t["title"].strip() or t.get("desc", "").strip() or st.children(t) or t.get("attachments")):
+            st.list_of(t)["tasks"].remove(t)
+            st.log_event("deleted", t)
+            st.save()
+            self.refresh_later(par["id"], select=True)
+        else:
+            self.step_add(par, after=t)
+
+    # ---- drag a note (and its steps) to a new place: pull right to make it a step, left to take it out
+    def drag_start(self, card):
+        self.drag_end(False)                    # a drag a refresh cut off: its ghost and line go first
+        if card not in self._main_cards():
+            return False
+        if not self._can_move():
+            return False
+        task = card.task
+        cards = self._cards_of(task, self._main_cards())
+        for c in cards:
+            fx = QGraphicsOpacityEffect(c)
+            fx.setOpacity(0.35)
+            c.setGraphicsEffect(fx)
+        self.hide_pills()
+        line = QFrame(self.list)
+        line.setStyleSheet(f"background: {C['accent']}; border: none;")
+        line.setAttribute(Qt.WA_TransparentForMouseEvents)
+        line.setFixedHeight(2)
+        line.hide()
+        n = len(cards) - 1
+        ghost = QLabel(((task["title"].strip() or "Untitled")[:40]) + (f"  +{n}" if n else ""), self.list)
+        ghost.setAttribute(Qt.WA_TransparentForMouseEvents)
+        ghost.setStyleSheet(f"background: {C['field']}; color: {C['text']}; border: 1px solid {C['border']}; "
+                            f"border-radius: 6px; padding: 3px 8px;")
+        ghost.adjustSize()
+        ghost.hide()
+        self._row_drag = {"task": task, "cards": cards, "h": self.store.height(task), "d0": card.depth,
+                      "x0": None, "slot": None, "line": line, "ghost": ghost}
+        return True
+
+    def drag_move(self, gpos):
+        dr = getattr(self, "_row_drag", None)
+        if not isinstance(dr, dict):
+            return
+        pos = self.list.mapFromGlobal(gpos)
+        if dr["x0"] is None:
+            dr["x0"] = pos.x()
+        rows = sorted((c for c in self._main_cards() if c.isVisible() and c not in dr["cards"]), key=lambda c: c.y())
+        line, ghost = dr["line"], dr["ghost"]
+        ghost.move(int(pos.x()) + 14, int(pos.y()) - ghost.height() // 2)
+        ghost.show()
+        ghost.raise_()
+        k = next((i for i, c in enumerate(rows) if c.y() + c.height() / 2 > pos.y()), len(rows))
+        above = rows[k - 1] if k > 0 else None
+        below = rows[k] if k < len(rows) else None
+        lo = below.depth if below else 0
+        hi = min(above.depth + 1 if above else 0, self.MAX_DEPTH - dr["h"])
+        if lo > hi:                             # it would go too deep here
+            line.hide()
+            dr["slot"] = None
+        else:
+            dep = max(lo, min(hi, dr["d0"] + round((pos.x() - dr["x0"]) / TaskCard.IND)))
+            par = next((c.task for c in reversed(rows[:k]) if c.depth == dep - 1), None) if dep else None
+            before = below.task if below is not None and below.depth == dep else None
+            dr["slot"] = (par, before)
+            if above and below:
+                y = (above.geometry().bottom() + below.y()) // 2
+            else:
+                y = below.y() if below else (above.geometry().bottom() if above else 0)
+            x = (rows[0].x() if rows else 0) + ROW_MARGIN + 8 + dep * TaskCard.IND
+            line.setGeometry(x, y - 1, max(20, self.list.width() - x - 8), 2)
+            line.show()
+            line.raise_()
+        vp = self.scroll.viewport().mapFromGlobal(gpos)
+        bar = self.scroll.verticalScrollBar()
+        if vp.y() < 24:
+            bar.setValue(bar.value() - 12)
+        elif vp.y() > self.scroll.viewport().height() - 24:
+            bar.setValue(bar.value() + 12)
+
+    def drag_end(self, drop=True):
+        dr = getattr(self, "_row_drag", None)
+        self._row_drag = None
+        if not isinstance(dr, dict):
+            return
+        for c in dr["cards"]:
+            try:
+                c.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+        for w in (dr["line"], dr["ghost"]):
+            try:
+                w.deleteLater()
+            except RuntimeError:
+                pass
+        if drop and dr["slot"] is not None:
+            par, before = dr["slot"]
+            self.place(dr["task"], par, before=before)
+
+    def move_task(self, task, delta, keep_selected=False):
+        """Alt+Up/Down: swap with the neighbour you see above/below it. Urgent tasks stay above the rest."""
+        pid = task.get("parent")
+        if task["done"] and not pid:
+            return
+        if not self._can_move():
             return
         later = bool(task.get("later"))
-        use_urgent = flag_on(self.store.settings, "urgent")
-        shown = [t for t in self.store.tasks if not t["done"] and bool(t.get("later")) == later]
-        if not later:
+        use_urgent = flag_on(self.store.settings, "urgent") and not pid
+        if pid:                             # a step moves among the steps of its note
+            shown = [t for t in self.store.tasks if t.get("parent") == pid]
+        else:
+            shown = [t for t in self.store.tasks
+                     if not t["done"] and not t.get("parent") and bool(t.get("later")) == later]
+        if not later and not pid:
             shown.sort(key=lambda t: not (use_urgent and t.get("urgent")))
         k = shown.index(task)
         j = k + delta
@@ -13542,6 +14170,7 @@ class Panel(RoundedWindow):
             self.status.setText("\u2191\u2193 browse \u00B7 Enter open \u00B7 Ctrl+Enter done \u00B7 "
                                 "Tab more \u00B7 Alt+\u2191\u2193 move")
             self.status.setToolTip("Tab: Later / Let go / Delete, then Enter. Ctrl+C: copy. Delete key: delete. "
+                                   "Alt+Left / Right: a step of the note above, or out. Ctrl+.: hide or show steps. "
                                    "Esc while editing: back to browsing.")
         else:
             self.status.setStyleSheet("")
@@ -13569,23 +14198,47 @@ class Panel(RoundedWindow):
         self.refresh_later(task["id"], select=True)
 
     def set_done(self, task, on, record=True):
-        l = self.store.list_of(task)
-        idx = l["tasks"].index(task) if task in l["tasks"] else 0
-        before = (bool(task["done"]), task.get("done_at"))
-        task["done"] = on
-        task["done_at"] = datetime.now().isoformat(timespec="seconds") if on else None
-        self.store.log_event("done" if on else "reopened", task)
-        if on:  # done sinks to the bottom
-            l["tasks"].remove(task)
-            l["tasks"].append(task)
-        self.store.save()
-        self.remove_later(task, pause_ms=140, kind="done") if on else self.refresh_later()   # tick, then away
+        """Done: the note and its open steps (those marked closed_with). Reopen: the note, the done notes above
+        it, and the steps that were closed with it."""
+        st = self.store
+        l = st.list_of(task)
+        tasks = l["tasks"]
+        if on:
+            group = [task] + [x for x in st.subtree(task, tasks)[1:] if not x["done"]]
+        else:
+            group = ([task] + [a for a in st.ancestors(task, tasks) if a["done"]]
+                     + [x for x in st.subtree(task, tasks)[1:] if x["done"] and x.get("closed_with")])
+        before = [(x, bool(x["done"]), x.get("done_at"), x.get("closed_with")) for x in group]
+        order = list(tasks)
+        stamp = datetime.now().isoformat(timespec="seconds")
+        for x in group:
+            x["done"], x["done_at"] = on, (stamp if on else None)
+            x.pop("closed_with", None)
+            if on and x is not task:
+                x["closed_with"] = True
+            st.log_event("done" if on else "reopened", x, **({"with": task["id"]} if x is not task else {}))
+        top = not task.get("parent")
+        if on and top:  # done sinks to the bottom, its steps with it
+            tasks.extend(x for x, _ in st._take(l, st.subtree(task, tasks)))
+        st.save()
+        if on and st.settings.get("check_sound", True):
+            play_check_tick()
+        if on and top:
+            self.remove_later(task, pause_ms=140, kind="done")    # tick, then away
+        else:
+            self.refresh_later()                                   # a step stays where it is, checked
         if record:
             def undo():
-                task["done"], task["done_at"] = before
-                self.store.log_event("done" if before[0] else "reopened", task, undo=True)
-                self._restore_position(task, l, idx)
-                self.store.save()
+                for x, done, at, cw in before:
+                    x["done"], x["done_at"] = done, at
+                    x.pop("closed_with", None)
+                    if cw:
+                        x["closed_with"] = cw
+                    st.log_event("done" if done else "reopened", x, undo=True)
+                had = {id(x) for x in order}
+                now = {id(x) for x in tasks}
+                tasks[:] = [x for x in order if id(x) in now] + [x for x in tasks if id(x) not in had]
+                st.save()
                 self.refresh_later(task["id"], select=True)
             self._push_undo("\u2713  " + pick_fresh(DONE_TOASTS, "done_toast") if on else "Back to open", undo)
 
@@ -13596,7 +14249,7 @@ class Panel(RoundedWindow):
         self.refresh_later()
 
     def update_counts(self):
-        open_t = [t for t in self.store.tasks if not t["done"] and not t.get("later")]
+        open_t = [t for t in self.store.tasks if not t["done"] and not t.get("later") and not t.get("parent")]
         g = sum(1 for t in open_t if t.get("urgent"))
         u = sum(1 for t in open_t if t.get("urge"))
         d = sum(1 for t in open_t if t.get("distraction"))
@@ -24199,6 +24852,7 @@ class SettingsWindow(QWidget):
         gl = self._group(v, "The full list")
         self._toggle(gl, "Close it when I click elsewhere", "Like a popup. It stays open for its own menus and drops.",
                      "close_on_outside", False)
+        self._toggle(gl, "Tick sound", "A soft double tick when you check a note or a step off.", "check_sound", True)
         self._row(gl, "Tour", "A short picture tour, then a hands-on try.", self._button("Take the tour", ctx.start_tour))
         v.addStretch(1)
         return area

@@ -156,6 +156,7 @@ System, Light or Dark theme (System follows Windows). The white glossy thought c
 | Start a focus round | **Focus** in the list. |
 | Park a file, image or link | Drag it onto the cloud, or `Ctrl+V` a screenshot in the quick note. |
 | Use a parked file | Drag it out of the note, or hover it and click copy. |
+| Break a note into steps | Hover it and click **+**; `Enter` adds the next step. `Alt+Right` / `Alt+Left`, or drag it by its dots, to make a note a step or take it out. |
 | Copy a note into a message | Hover it and click the copy icon, or select it and press `Ctrl+C`. |
 | Block apps for a while | The no-entry button at the top of the full list (the time left counts down above it while blocking), or right-click the cloud > **Block apps**. Pick which ones in Settings > **App blocker**. Press and hold the cloud to unblock one for a few minutes. |
 | Get help | **?** in the list: how it works and the welcome tour. |
