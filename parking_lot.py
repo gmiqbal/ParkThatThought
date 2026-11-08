@@ -88,8 +88,13 @@ APP_NAME = "Headroom"   # display name only; files, folders and IDs keep the old
 OLD_APP_NAME = "Park That Thought"   # keep: 1.7.2 and older only take an update that contains this line
 APP_TAGLINE = "Capture thoughts, plan your day, block distractions."
 APP_FEATURES = "Quick notes \u00B7 Tasks \u00B7 Calendar \u00B7 Meeting bar \u00B7 Focus timer \u00B7 App blocker \u00B7 Drop shelf \u00B7 Daily snap \u00B7 Check-ins"
-APP_VERSION = "1.8"
+APP_VERSION = "1.8.1"
 CHANGELOG = (   # Settings > About > Update log, newest first; the top one is APP_VERSION. (version, date, title, lines)
+    ("1.8.1", "8 Nov 2026", "Star what matters today", ("Click the star in a note's or step's pill: a Starred tab after Inbox shows them from every list, with the notes above them. Done or edits there change the note itself.",
+                           "Connect Google and your notes, tabs and settings sync between your PCs through Headroom's hidden Drive folder.",
+                           "The ▶ in a note's pill starts a focus round on it; the note counts its rounds and time.",
+                           "Give a note a deadline with the calendar in its pill. Links in notes open in your browser.",
+                           "Let go is now a balloon icon.")),
     ("1.8", "24 Oct 2026", "Steps under a note", ("Hover a note and click + to add steps under it, like a checklist. Enter adds the next one; steps go three levels deep.",
                            "Alt+Right / Alt+Left, or drag a note by its dots, to make it a step or take it out. A note you move stays where you put it.",
                            "Checking a note checks its open steps too (Ctrl+Z reopens just those), with a soft tick (Settings: Tick sound).")),
@@ -453,6 +458,36 @@ def kill_processes(pids):
     except Exception as e:
         log_error(f"app blocker could not close an app: {e}")
     return n
+
+
+def app_launch_args(pid, path):
+    """The command that opens this process's app again: a Store app through its AppUserModelID (its exe can't be
+    started directly), any other app by its path. Both go through explorer, so the app isn't our child. Windows only."""
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.OpenProcess.restype = ctypes.c_void_p
+        h = k.OpenProcess(0x1000, False, pid)                # PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            try:
+                n, buf = ctypes.c_uint(256), ctypes.create_unicode_buffer(256)
+                if k.GetApplicationUserModelId(ctypes.c_void_p(h), ctypes.byref(n), buf) == 0 and buf.value:
+                    return ["explorer.exe", "shell:AppsFolder\\" + buf.value]
+            finally:
+                k.CloseHandle(ctypes.c_void_p(h))
+    except Exception:
+        pass
+    return ["explorer.exe", path]
+
+
+def open_app(args):
+    """Start an app again, from app_launch_args (or a browser with --app-id for a web app). Windows only."""
+    if not IS_WIN:
+        return
+    try:
+        subprocess.Popen(args, close_fds=True)
+    except Exception as e:
+        log_error(f"app blocker could not open an app again: {e}")
 
 
 def windowed_apps():
@@ -1084,6 +1119,9 @@ def theme_dark():
     return QColor(C["bg"]).lightness() < 128
 
 
+RING_GAP = 12          # margin rule to a note's ring; the grip dots sit in the first 8 px of it
+
+
 def veil(alpha):
     """The text colour at this alpha: a faint white veil on the dark theme, a faint shade on the light one."""
     c = QColor(C["text"])
@@ -1711,6 +1749,8 @@ class Store:
         configure_flags(self.data["settings"])
         self.context_fn = lambda: {"in_focus": False}   # replaced by main() with the focus timer's state
         self._backfill_log()
+        self._seen = sync_digests(self.data)   # what each note looked like at the last save, to date edits
+        self.on_edit = lambda: None            # DriveSync: an edit worth sending to your other PCs
         self._dirty = False
         self._fails = 0
         self.on_status = lambda ok: None
@@ -1749,8 +1789,14 @@ class Store:
                     break
         return best or {"lists": [], "settings": {}}
 
+    def _ids(self):
+        """Every Important item needs an id to sync; older ones were saved without."""
+        for w in self.data.get("important_work", []):
+            w.setdefault("id", uuid.uuid4().hex[:12])
+
     def _migrate(self):
         """Old single-list files become an 'Inbox' tab."""
+        self._ids()
         d = self.data
         if "lists" not in d:
             d["lists"] = [{"id": "inbox", "name": "Inbox", "tasks": d.get("tasks", [])}]
@@ -1932,6 +1978,68 @@ class Store:
         self._dirty = True
         self._timer.start(400)
 
+    def stamp(self):
+        """Date every note, tab, Important item and setting that changed since the last save; a deleted one gets a
+        tombstone. sync_merge picks the newest edit of each. Done here so no edit site has to remember it."""
+        self._ids()
+        cur = sync_digests(self.data)
+        if cur == self._seen:
+            return
+        now = time.time()   # ponytail: wall clocks; two PCs far out of sync pick the wrong edit of the same note
+        sync = self.data.setdefault("sync", {})
+        m, d = sync.setdefault("m", {}), sync.setdefault("d", {})
+        for k, v in cur.items():
+            if self._seen.get(k) != v:
+                m[k] = now
+                d.pop(k, None)
+        for k in self._seen.keys() - cur.keys():
+            d[k] = now
+            m.pop(k, None)
+        self._seen = cur
+        self.on_edit()
+
+    def sync_payload(self):
+        """What goes to Drive: everything that syncs, never this PC's Google login or calendar links."""
+        self.stamp()
+        return sync_payload(self.data)
+
+    def merge_remote(self, remote, first=False):
+        """Fold another PC's copy into this one, in place: open cards keep pointing at the same note dicts.
+        True if anything here changed."""
+        self.stamp()
+        before = sync_canonical(self.sync_payload())
+        merged = sync_merge(self.data, remote, first)
+        mine = {t["id"]: t for t in self.all_tasks()}
+        for l in merged["lists"]:
+            for i, nt in enumerate(l["tasks"]):
+                t = mine.get(nt["id"])
+                if t is not None:
+                    if t is not nt:
+                        t.clear()
+                        t.update(nt)
+                    l["tasks"][i] = t
+        old_lists = {l["id"]: l for l in self.lists}
+        for i, nl in enumerate(merged["lists"]):
+            l = old_lists.get(nl["id"])
+            if l is not None:
+                tasks = nl["tasks"]
+                l.clear()
+                l.update(nl)
+                l["tasks"] = tasks
+                merged["lists"][i] = l
+        st = self.settings
+        st.clear()
+        st.update(merged.pop("settings"))
+        self.data.clear()
+        self.data.update(merged, settings=st)
+        self._migrate()
+        configure_flags(st)
+        self._seen = sync_digests(self.data)
+        changed = sync_canonical(self.sync_payload()) != before
+        if changed:
+            self.save()
+        return changed
+
     def _write_snapshot(self, text):
         try:
             self._write_atomic(DB_FILE, text)
@@ -1953,6 +2061,7 @@ class Store:
             self._finish_async_save()
         if not self._dirty:
             return
+        self.stamp()
         self.data["saved_at"] = time.time()
         text = json.dumps(self.data, indent=2, ensure_ascii=False)
         self._dirty = False             # edits after this snapshot mark it dirty again
@@ -2009,6 +2118,7 @@ class Store:
             self._finish_async_save()
         if not self._dirty:
             return True
+        self.stamp()
         self.data["saved_at"] = time.time()
         text = json.dumps(self.data, indent=2, ensure_ascii=False)
         ok = self._write_snapshot(text)
@@ -3474,13 +3584,16 @@ class FocusTimer(QObject):
         st = self.state
         return self.remaining() / (st["minutes"] * 60) if st else 0.0
 
-    def start(self, minutes, kind="focus"):
+    def start(self, minutes, kind="focus", task=None):
+        """task: a note's ▶. The round is on that note, and its focus time adds up on the note when logged."""
         if self.running:
             self.stop()
         self.clear_overrun()
         now = time.time()
         self.store.settings["timer"] = {"minutes": minutes, "started": now, "end": now + minutes * 60,
                                         "paused_left": None, "kind": kind}
+        if task is not None:
+            self.state.update(task=task["id"], on=" ".join(task["title"].split())[:80] or "a note")
         self.apps, self._app_ticks = {}, 0
         self.store.save()
         self.qt.start()
@@ -3662,6 +3775,13 @@ class FocusTimer(QObject):
             row["note"] = note
         if st.get("on"):
             row["on"] = st["on"]
+        if st.get("task") and row["kind"] == "focus":
+            row["task"] = st["task"]
+            t = next((x for x in self.store.all_tasks() if x["id"] == st["task"]), None)
+            if t is not None and focused >= 60:      # a round stopped in its first minute isn't a session
+                t["focus_n"] = t.get("focus_n", 0) + 1
+                t["focus_min"] = round(t.get("focus_min", 0) + focused / 60, 1)
+                self.store.save()
         self.last_apps = self.app_minutes()
         if self.last_apps and row["kind"] == "focus":
             row["apps"] = self.last_apps
@@ -3740,6 +3860,7 @@ class AppBlocker(QObject):
     CAUGHT_GAP_S = 3           # ponytail: one tone and line per app at most this often (an app that restarts itself
                                # gets one every 3 s; a per-app back-off if one does)
     WARN_S = 15                # warning before a break ends and the apps close again
+    REOPEN_S = 120             # Pause, Allow, Stop or a break this soon after a catch opens that app again
     changed = Signal()         # a block started, ended, went on or off a break, or let an app open (not every sweep)
 
     def __init__(self, store, timer, nudges=None):
@@ -3749,6 +3870,7 @@ class AppBlocker(QObject):
         self._quiet = False        # the next sweep closes apps without the tone (start, after a break)
         self.last_tries = ""       # a focus session's tally waits here for its end card
         self._call_said = 0
+        self._caught = {}          # {pick: (when, launch args)} of apps just closed on you, to open again if let in
         timer.started.connect(self._timer_started)
         timer.ended.connect(self._timer_ended)
         b = self.block
@@ -3820,7 +3942,7 @@ class AppBlocker(QObject):
         self.store.settings["block"] = {"start": now, "until": None if focus else now + float(minutes) * 60,
                                         "minutes": None if focus else float(minutes), "focus": bool(focus),
                                         "break_until": 0, "closed": [], "caught": 0}
-        self._said = {}
+        self._said, self._caught = {}, {}
         self._quiet = True
         self._save()
         self.changed.emit()
@@ -3843,6 +3965,7 @@ class AppBlocker(QObject):
         self.changed.emit()
         self.say(f"Break for {fmt_min(round(float(minutes)))} min. Your apps are open for now.", [], timeout_ms=4000,
                  emoji="\U0001F513")
+        self._reopen()
 
     def end(self, early=False, quiet=False):
         """Stop blocking and log it. Says the apps are unblocked, with how often you tried, unless quiet."""
@@ -3867,6 +3990,8 @@ class AppBlocker(QObject):
                            "end": datetime.now().isoformat(timespec="seconds"), "planned_min": b.get("minutes") or "",
                            "focused_min": round((now - b["start"]) / 60, 1), "completed": not early,
                            "note": note + ("; with a focus round" if b.get("focus") else "")})
+        if early:
+            self._reopen()
         if quiet:
             return
         ls = getattr(self.timer, "last_session", None)
@@ -3935,6 +4060,7 @@ class AppBlocker(QObject):
         self.changed.emit()
         self.say(f"{app_nice(pick)} is open for {fmt_min(round(float(minutes)))} min.", [], timeout_ms=4000,
                  emoji="\U0001F513")
+        self._reopen([pick])
 
     ALLOWS = [("2 min", 120), ("5 min", 300), ("10 min", 600),
               ("This block", "block"), ("2 h", 7200), ("4 h", 14400), ("Rest of today", "today")]
@@ -3966,6 +4092,7 @@ class AppBlocker(QObject):
         self.changed.emit()
         self.say(f"{app_nice(pick)} is allowed until {datetime.fromtimestamp(until):%H:%M}, in every block.", [],
                  timeout_ms=5000, emoji="\U0001F513")
+        self._reopen([pick])
 
     def block_again(self, pick):
         """Undo an Allow: the app is blocked again (closed quietly if a block is on)."""
@@ -3986,6 +4113,26 @@ class AppBlocker(QObject):
         self._save()
         self.changed.emit()
         self.say(f"{app_nice(pick)} is unblocked until this block ends.", [], timeout_ms=4000, emoji="\U0001F513")
+        self._reopen([pick])
+
+    def _reopen(self, picks=None):
+        """Open again the apps (all, or these picks) that were closed on you in the last REOPEN_S seconds: you were
+        trying to open them when you pressed Pause, Allow or Stop."""
+        now = time.time()
+        for p in list(self._caught) if picks is None else picks:
+            when, args = self._caught.pop(p, (0, None))
+            if args and now - when <= self.REOPEN_S:
+                open_app(args)
+
+    def _launch_for(self, pick, hits, procs):
+        """How to open this caught app again, read before it's closed: a web app through its browser and app id."""
+        if pick.startswith("pwa:"):
+            browser = (_PWA_CACHE or installed_pwas()).get(pick[4:], ("", "chrome"))[1]
+            path = next((path for exe, path in procs.values() if exe == browser), None)
+            return [path, f"--app-id={pick[4:]}"] if path else None
+        pids = [h for h, p in hits.items() if p == pick and not isinstance(h, tuple)]
+        pid = next((h for h in pids if procs[h][0] == pick), pids[0])        # the main exe over its helpers
+        return app_launch_args(pid, procs[pid][1])
 
     # the circle
     def say(self, text, buttons, timeout_ms=8000, minute_input=None, emoji="\U0001F6AB", keys=None):
@@ -4104,6 +4251,7 @@ class AppBlocker(QObject):
         closed = b.setdefault("closed", [])
         for pick in set(hits.values()) - {c["pick"] for c in closed}:
             closed.append({"pick": pick})
+        launch = {} if quiet else {p: self._launch_for(p, hits, procs) for p in set(hits.values())}
         pids = [h for h in hits if not isinstance(h, tuple)]
         wins = [h[1] for h in hits if isinstance(h, tuple)]
         if pids:
@@ -4118,6 +4266,7 @@ class AppBlocker(QObject):
                 tries = b.setdefault("tries", {})
                 for p in fresh:
                     self._said[p] = now
+                    self._caught[p] = (now, launch.get(p))
                     tries[p] = tries.get(p, 0) + 1
                 play_reminder_tone("block")
                 left = (f"blocked for {fmt_min(max(1, round(self.left_min())))} more min." if b.get("until")
@@ -4312,6 +4461,239 @@ class PhoneSync(QObject):
             return False
         st.save()
         return True
+
+
+# ---------------------------------------------------------------- notes sync between PCs (Google Drive app folder)
+# Settings that belong to one PC: its Google login and private calendar links (encrypted for this Windows user, so
+# useless elsewhere), where its windows sit, and what is running on it right now.
+SYNC_LOCAL_SETTINGS = frozenset((
+    "current", "google_calendar_auth", "google_calendar_feed", "google_calendar_feeds", "bubble", "panel_size",
+    "section_h", "open_section", "meeting_bar_geometry", "meeting_bar_taskbar_geometry", "meeting_bar_pin",
+    "last_input_at", "timer", "block", "break_over_at", "break_over_min", "nudge_active", "nudge_paused_until",
+    "nudge_work_last", "nudge_calendar_last", "coffee_nudge_at", "phone_sync_acked", "seen_version", "first_seen",
+    "onboarding_show", "checkin_count", "calendar_notice_sent", "saved_pop", "snap_no", "drive_sync_at"))
+SYNC_TOMB_DAYS = 90   # ponytail: a PC offline longer than this can bring back a note deleted elsewhere
+
+
+def sync_entities(data):
+    """Everything that syncs, one entry per note, tab, Important item and setting, keyed "t:id", "l:id", "w:id",
+    "s:key"; "L" and "W" hold the tab order and the Important order. A tab holds the order of its notes."""
+    out = {"L": [l["id"] for l in data.get("lists", [])], "W": [w["id"] for w in data.get("important_work", [])]}
+    for l in data.get("lists", []):
+        out["l:" + l["id"]] = {**{k: v for k, v in l.items() if k != "tasks"}, "order": [t["id"] for t in l["tasks"]]}
+        for t in l["tasks"]:
+            out["t:" + t["id"]] = {"list": l["id"], "task": t}
+    for w in data.get("important_work", []):
+        out["w:" + w["id"]] = w
+    for k, v in data.get("settings", {}).items():
+        if k not in SYNC_LOCAL_SETTINGS:
+            out["s:" + k] = v
+    return out
+
+
+def sync_digests(data):
+    return {k: json.dumps(v, sort_keys=True, ensure_ascii=False, default=str) for k, v in sync_entities(data).items()}
+
+
+def sync_merge(local, remote, first=False):
+    """Two copies of the notes made into one. Each note, tab, Important item and setting keeps its newest edit
+    (data["sync"]["m"]: key -> when it last changed); one deleted after its last edit stays deleted ("d": key -> when).
+    first: this PC's first sync, so the Drive copy wins wherever both have the same thing (fresh defaults here must not
+    overwrite your real settings); notes only on this PC are kept. Returns a new dict, reusing local's objects."""
+    ls, rs = local.get("sync") or {}, remote.get("sync") or {}
+    lm, rm = ({} if first else ls.get("m", {})), rs.get("m", {})
+    ea, eb = sync_entities(local), sync_entities(remote)
+    cut = time.time() - SYNC_TOMB_DAYS * 86400
+    dead = {k: max(ls.get("d", {}).get(k, 0), rs.get("d", {}).get(k, 0)) for k in {*ls.get("d", {}), *rs.get("d", {})}}
+    dead = {k: t for k, t in dead.items() if t > cut}
+    stamps = {}
+
+    def pick(k):
+        sa = lm.get(k, 0) if k in ea else -1
+        sb = rm.get(k, 0) if k in eb else -1
+        if sa < 0 and sb < 0:
+            return None
+        if dead.get(k, 0) > max(sa, sb):
+            return None
+        stamps[k] = max(sa, sb)
+        return ea[k] if sa > sb or (sa == sb and not first) else eb[k]
+
+    keys = ea.keys() | eb.keys()
+    lists = {k[2:]: v for k in keys if k.startswith("l:") and (v := pick(k)) is not None}
+    tasks = {k[2:]: v for k in keys if k.startswith("t:") and (v := pick(k)) is not None}
+    work = {k[2:]: v for k in keys if k.startswith("w:") and (v := pick(k)) is not None}
+    def grew(k, order, extra, prefix):
+        """An order that gained items is as new as they are, so the other PC takes it instead of its older one."""
+        if extra:
+            stamps[k] = max(stamps.get(k, 0), *(stamps.get(prefix + i, 0) for i in extra))
+        return order
+
+    seen_tabs = [i for i in (pick("L") or []) if i in lists]
+    extra_tabs = sorted(i for i in lists if i not in seen_tabs)
+    tab_order = grew("L", seen_tabs + extra_tabs, extra_tabs, "l:")
+    if not tab_order:      # every tab was deleted somewhere: keep one, the notes still need a home
+        lists["inbox"] = {"id": "inbox", "name": "Inbox", "order": []}
+        tab_order = ["inbox"]
+    home = {}
+    for tid, e in tasks.items():
+        home.setdefault(e["list"] if e["list"] in lists else tab_order[0], []).append(tid)
+    out_lists = []
+    for lid in tab_order:
+        mine = set(home.get(lid, []))
+        order = [i for i in lists[lid]["order"] if i in mine]
+        extra = sorted(mine - set(order), key=lambda i: -max(lm.get("t:" + i, 0), rm.get("t:" + i, 0)))
+        grew("l:" + lid, None, extra, "t:")
+        out_lists.append({**{k: v for k, v in lists[lid].items() if k != "order"},
+                          "tasks": [tasks[i]["task"] for i in extra + order]})   # notes new to this tab go on top
+    w_order = [i for i in (pick("W") or []) if i in work]
+    w_extra = sorted(i for i in work if i not in w_order)
+    w_order = grew("W", w_order + w_extra, w_extra, "w:")
+    settings = {k: v for k, v in local.get("settings", {}).items() if k in SYNC_LOCAL_SETTINGS}
+    for k in keys:
+        if k.startswith("s:") and (v := pick(k)) is not None:
+            settings[k[2:]] = v
+    out = {k: v for k, v in local.items() if k not in ("lists", "important_work", "settings", "sync")}
+    out.update(lists=out_lists, important_work=[work[i] for i in w_order], settings=settings,
+               sync={"m": {k: t for k, t in stamps.items() if t > 0}, "d": dead})
+    return out
+
+
+def drive_request(url, token, data=None, method=None, content_type="application/json"):
+    """One call to Google Drive. JSON back ({} for none)."""
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = content_type
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403 and b"accessNotConfigured" in exc.read():
+            raise RuntimeError("the Google Drive API is off in this app's Google Cloud project.") from None
+        if exc.code in (401, 403):
+            raise RuntimeError("Google Drive access is missing. Reconnect Google in Settings to sync notes.") from None
+        raise RuntimeError(f"Google Drive returned error {exc.code}.") from None
+
+
+DRIVE_API = "https://www.googleapis.com/drive/v3/files"
+DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+
+
+def drive_fetch(token):
+    """(file id, notes) of tasks.json in the app's hidden Drive folder; (None, None) before the first upload."""
+    query = urllib.parse.urlencode({"spaces": "appDataFolder", "q": "name = 'tasks.json' and trashed = false",
+                                    "fields": "files(id)", "orderBy": "modifiedTime desc"})
+    files = drive_request(f"{DRIVE_API}?{query}", token).get("files", [])
+    if not files:
+        return None, None
+    return files[0]["id"], drive_request(f"{DRIVE_API}/{files[0]['id']}?alt=media", token)
+
+
+def drive_put(token, file_id, text):
+    """Replace tasks.json in the app folder, or create it there. Returns its file id."""
+    body = text.encode("utf-8")
+    if file_id:
+        return drive_request(f"{DRIVE_UPLOAD}/{file_id}?uploadType=media", token, body, "PATCH").get("id", file_id)
+    sep = "headroom" + secrets.token_hex(8)
+    meta = json.dumps({"name": "tasks.json", "parents": ["appDataFolder"]})
+    multipart = (f"--{sep}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n"
+                 f"--{sep}\r\nContent-Type: application/json\r\n\r\n").encode() + body + f"\r\n--{sep}--".encode()
+    return drive_request(f"{DRIVE_UPLOAD}?uploadType=multipart", token, multipart, "POST",
+                         f"multipart/related; boundary={sep}")["id"]
+
+
+class DriveSync(QObject):
+    """Your notes on every PC signed in to the same Google account. A copy of tasks.json lives in the app's hidden
+    Drive folder; on launch, every 2 minutes and soon after an edit: download it, merge (sync_merge), apply here,
+    upload the result if it differs. The files on this PC stay the real ones, so it all works offline.
+    Attachments, Mirror photos, music and the thought history stay on each PC."""
+    EVERY_MS = 120000
+    AFTER_EDIT_MS = 15000
+
+    def __init__(self, store, on_change=None, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.on_change = on_change or (lambda: None)
+        self.status = "Off until Google is connected."
+        self._thread, self._result, self._job = None, None, None
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(self.EVERY_MS)
+        self.soon = QTimer(self)
+        self.soon.setSingleShot(True)
+        self.soon.timeout.connect(self.tick)
+        self._poll = QTimer(self)
+        self._poll.setInterval(200)
+        self._poll.timeout.connect(self._finish)
+        store.on_edit = lambda: self.soon.isActive() or self.soon.start(self.AFTER_EDIT_MS)
+        QTimer.singleShot(4000, self.tick)
+
+    def auth(self):
+        return self.store.settings.get("google_calendar_auth")
+
+    def _run(self, job, fn):
+        self._job, self._result = job, None
+
+        def go():
+            try:
+                self._result = fn()
+            except Exception as e:
+                self._result = e
+        self._thread = threading.Thread(target=go, daemon=True)
+        self._thread.start()
+        self._poll.start()
+
+    def tick(self):
+        auth = self.auth()
+        if not auth or self._thread is not None:
+            return
+
+        def fetch():
+            token = calendar_access(auth)
+            return (token, *drive_fetch(token))
+        self._run("fetch", fetch)
+
+    def _finish(self):
+        if self._thread is None or self._thread.is_alive():
+            return
+        self._poll.stop()
+        self._thread = None
+        job, res = self._job, self._result
+        if isinstance(res, Exception):
+            self.status = "Couldn't sync: " + str(res)[:140]
+            log_error(f"drive sync: {self.status}")
+            return
+        if job == "fetch":
+            self.receive(*res)
+        else:
+            self.store.settings["drive_sync_at"] = time.time()
+            self.status = "Synced " + datetime.now().strftime("%H:%M")
+
+    def receive(self, token, file_id, remote):
+        """Merge what Drive has, then send the result back if Drive's copy is behind. Split from the network so
+        tests can feed it directly."""
+        st = self.store
+        if isinstance(remote, dict) and isinstance(remote.get("lists"), list):
+            if st.merge_remote(remote, first=not st.settings.get("drive_sync_at")):
+                self.on_change()
+        payload = st.sync_payload()
+        if remote is not None and sync_canonical(payload) == sync_canonical(remote):
+            st.settings["drive_sync_at"] = time.time()
+            self.status = "Synced " + datetime.now().strftime("%H:%M")
+            return
+        text = json.dumps(payload, ensure_ascii=False)
+        self._run("put", lambda: drive_put(token, file_id, text))
+
+
+def sync_payload(data):
+    return {"lists": data["lists"], "important_work": data.get("important_work", []), "sync": data.get("sync", {}),
+            "settings": {k: v for k, v in data.get("settings", {}).items() if k not in SYNC_LOCAL_SETTINGS}}
+
+
+def sync_canonical(data):
+    return json.dumps({k: v for k, v in data.items() if k != "saved_at"}, sort_keys=True, ensure_ascii=False,
+                      default=str)
 
 
 def fmt_min(m):
@@ -7892,9 +8274,13 @@ def edge_jump(ed, e):
     return True
 
 
+WEB_LINK = re.compile(r"(?:https?://|www\.)[^\s<>\"]+")
+
+
 class AutoText(QTextEdit):
     """Plain-text editor that wraps and grows to fit its content (no inner scrolling).
-    single_line: Enter finishes editing instead of adding a line; pasted newlines become spaces."""
+    single_line: Enter finishes editing instead of adding a line; pasted newlines become spaces.
+    A web link in it shows a hand on hover and opens in the browser on click."""
     submitted = Signal()
 
     def __init__(self, text, placeholder="", single_line=False, min_lines=1):
@@ -7911,7 +8297,70 @@ class AutoText(QTextEdit):
         self.setTabChangesFocus(True)
         self.document().setDocumentMargin(2)
         self.document().contentsChanged.connect(self._fit)
+        self.viewport().setMouseTracking(True)
+        self._press_link = ""
         self._fit()
+
+    def _link_hit(self, pos):
+        """(start, end, url) of the web link under this viewport point, or None."""
+        doc = self.document()
+        n = doc.documentLayout().hitTest(QPointF(pos) + QPointF(self.horizontalScrollBar().value(),
+                                                                self.verticalScrollBar().value()), Qt.ExactHit)
+        if n < 0:
+            return None
+        block = doc.findBlock(n)
+        i = n - block.position()
+        for m in WEB_LINK.finditer(block.text()):
+            url = m.group().rstrip(".,;:!?)")
+            if m.start() <= i < m.start() + len(url):
+                at = block.position() + m.start()
+                return at, at + len(url), url if "://" in url else "https://" + url
+        return None
+
+    def link_at(self, pos):
+        """The web link under this viewport point, or ""."""
+        hit = self._link_hit(pos)
+        return hit[2] if hit else ""
+
+    def _tint_link(self, hit):
+        """The hovered link in the accent color, underlined; nothing tinted when hit is None."""
+        sels = []
+        if hit:
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(self.document())
+            sel.cursor.setPosition(hit[0])
+            sel.cursor.setPosition(hit[1], QTextCursor.KeepAnchor)
+            sel.format.setForeground(QColor(C["accent_text"]))
+            sel.format.setFontUnderline(True)
+            sels.append(sel)
+        self.setExtraSelections(sels)
+
+    def mouseMoveEvent(self, e):
+        super().mouseMoveEvent(e)
+        if not e.buttons():
+            hit = self._link_hit(e.position())
+            self.viewport().setCursor(Qt.PointingHandCursor if hit else Qt.IBeamCursor)
+            self._tint_link(hit)
+
+    def leaveEvent(self, e):
+        self._tint_link(None)
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e):
+        self._press_link = self.link_at(e.position()) if e.button() == Qt.LeftButton else ""
+        if not self._press_link:        # a click on a link opens it instead of starting an edit
+            super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        link, self._press_link = self._press_link, ""
+        if not link:
+            super().mouseReleaseEvent(e)
+        elif self.link_at(e.position()) == link:
+            QDesktopServices.openUrl(QUrl(link))
+
+    def mouseDoubleClickEvent(self, e):
+        if not self.link_at(e.position()):
+            super().mouseDoubleClickEvent(e)
 
     def _fit(self):
         doc = self.document()
@@ -8062,6 +8511,90 @@ class TagPicker(QFrame):
             self.close()
             return
         super().keyPressEvent(e)
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        pill_check_later(self.card)       # the note's pill stayed while this was open
+
+
+def pill_check_later(card):
+    def check():
+        try:
+            card.maybe_hide_pill()
+        except RuntimeError:
+            pass
+    QTimer.singleShot(0, check)
+
+
+def deadline_text(value):
+    """'Due today', 'Due tomorrow', 'Due Fri', 'Due Tue, Oct 28' or 'Overdue · Oct 20'."""
+    d = datetime.fromisoformat(value).date()
+    days = (d - datetime.now().date()).days
+    if days < 0:
+        return f"Overdue · {d:%b} {d.day}"
+    if days < 2:
+        return ("Due today", "Due tomorrow")[days]
+    return f"Due {d:%a}" if days < 7 else f"Due {d:%a}, {d:%b} {d.day}"
+
+
+class DeadlinePicker(QFrame):
+    """The Deadline card: Today / Tomorrow / Next week, or any day on the calendar. Esc or a click outside closes it."""
+
+    def __init__(self, card):
+        super().__init__(None, Qt.Popup | Qt.FramelessWindowHint)
+        self.card = card
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet(full_style() + f"""
+            QFrame#tagInner {{ background: {C['surface_hi']}; border: 1px solid {C['border']}; border-radius: 12px; }}
+            QLabel#tagHead {{ color: {C['dim']}; font-size: 11px; font-weight: 700; }}
+            QToolButton#flag {{ padding: 5px 10px; font-size: 12px; }}""")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        inner = QFrame(self)
+        inner.setObjectName("tagInner")
+        outer.addWidget(inner)
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(8)
+        head = QLabel("Deadline", inner)
+        head.setObjectName("tagHead")
+        v.addWidget(head)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        today = datetime.now().date()
+        self.chips = {}
+        quick = [("Today", today), ("Tomorrow", today + timedelta(days=1)), ("Next week", today + timedelta(days=7))]
+        if card.task.get("deadline"):
+            quick.append(("Remove", None))
+        for word, day in quick:
+            b = QToolButton(inner)
+            b.setObjectName("flag")
+            b.setText(word)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFocusPolicy(Qt.StrongFocus)
+            b.clicked.connect(lambda _=False, d=day: self.pick(d))
+            row.addWidget(b)
+            self.chips[word] = b
+        row.addStretch(1)
+        v.addLayout(row)
+        self.cal = QCalendarWidget(inner)
+        self.cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        if card.task.get("deadline"):
+            self.cal.setSelectedDate(QDate.fromString(card.task["deadline"], "yyyy-MM-dd"))
+        self.cal.clicked.connect(lambda qd: self.pick(qd.toPython()))
+        self.cal.activated.connect(lambda qd: self.pick(qd.toPython()))
+        v.addWidget(self.cal)
+        self._first = self.chips["Today"]
+
+    def pick(self, day):
+        self.card.set_deadline(day.isoformat() if day else None)
+        self.close()
+
+    open_at = TagPicker.open_at
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        pill_check_later(self.card)
 
 
 def parse_reminder_at(value):
@@ -9509,7 +10042,7 @@ class TaskCard(QFrame):
         tree = panel._tree.get(task["id"]) or {}
         self.depth = tree.get("depth", 0)
         pad = 3 if self.depth else 7                # steps sit closer together, under their note
-        outer.setContentsMargins(ROW_MARGIN + 8 + self.depth * self.IND, pad, 6, pad)
+        outer.setContentsMargins(ROW_MARGIN + RING_GAP + self.depth * self.IND, pad, 6, pad)
         self.hover = Ease(self)
         self.setMouseTracking(True)     # the grab cursor over the grip zone
         outer.setSpacing(9)
@@ -9577,6 +10110,20 @@ class TaskCard(QFrame):
         self.itch_status.setObjectName("itchStatus")
         self.itch_status.setStyleSheet(f"color: {C['dim']}; font-size: 10px;")
         body.addWidget(self.itch_status)
+        self.focus_stat = None
+        if task.get("focus_n"):                 # the note's ▶ rounds, added up
+            n = task["focus_n"]
+            self.focus_stat = QLabel(f"{n} focus session{'s' if n != 1 else ''} · {fmt_minutes(task.get('focus_min', 0))}")
+            self.focus_stat.setObjectName("focusStat")
+            self.focus_stat.setToolTip("Focus rounds started from this note's ▶, and the time they add up to")
+            self.focus_stat.setStyleSheet(f"color: {C['dim']}; font-size: 10px;")
+            body.addWidget(self.focus_stat)
+        self.deadline_stat = QToolButton(self)
+        self.deadline_stat.setObjectName("deadlineStat")
+        self.deadline_stat.setCursor(Qt.PointingHandCursor)
+        self.deadline_stat.clicked.connect(self.deadline_menu)
+        body.addWidget(self.deadline_stat, 0, Qt.AlignLeft)
+        self._refresh_deadline()
 
         # while editing: the flag toggles inline (Tab: title > urgent > distraction > itch > details)
         self.flag_row = QWidget()
@@ -9641,6 +10188,11 @@ class TaskCard(QFrame):
             pass
         self.added.hide()
         body.addWidget(self.added)
+        self._added_to = 0
+        self._grow = QVariantAnimation(self)
+        self._grow.setEasingCurve(QEasingCurve.OutCubic)
+        self._grow.valueChanged.connect(lambda v: self.added.setFixedHeight(int(v)))
+        self._grow.finished.connect(lambda: self.added.setVisible(self._grow.endValue() > 0))
 
         for w in (self.title, self.desc):
             w.installEventFilter(self)
@@ -9659,6 +10211,24 @@ class TaskCard(QFrame):
         self.copy_btn.setFocusPolicy(Qt.NoFocus)   # keyboard: Ctrl+C on a selected note, so Tab still starts at Later
         self.copy_btn.clicked.connect(lambda: self.copy_note())
         ah.addWidget(self.copy_btn)
+        starred = bool(task.get("star"))
+        self.star_btn = IconAct("starfill" if starred else "star", "accent" if starred else "dim",
+                                "accent" if starred else "text",
+                                "Unstar: take it off the Starred tab" if starred
+                                else "Star: put it on the Starred tab, with the notes it sits under")
+        self.star_btn.setFocusPolicy(Qt.NoFocus)
+        self.star_btn.setProperty("row", True)
+        self.star_btn.installEventFilter(self)
+        self.star_btn.clicked.connect(lambda: panel.set_star(task, not task.get("star")))
+        ah.addWidget(self.star_btn)
+        self.play_btn = None
+        if not task["done"]:
+            self.play_btn = IconAct("play", C["dim"], C["text"], "Focus on this: start a focus round for this note")
+            self.play_btn.setFocusPolicy(Qt.NoFocus)
+            self.play_btn.setProperty("row", True)
+            self.play_btn.installEventFilter(self)
+            self.play_btn.clicked.connect(lambda: panel.focus_on(task))
+            ah.addWidget(self.play_btn)
         self.step_btn = None
         if self.depth < Panel.MAX_DEPTH and not task["done"]:
             self.step_btn = IconAct("plus", C["dim"], C["text"], "Add a step under this note")
@@ -9675,11 +10245,16 @@ class TaskCard(QFrame):
         self.remind_btn.setFocusPolicy(Qt.NoFocus)
         self.remind_btn.clicked.connect(self._edit_reminder)
         self.remind_btn.installEventFilter(self)
-        for b in (self.copy_btn, self.tags_btn, self.remind_btn):
+        self.deadline_btn = IconAct("calendar", C["dim"], C["text"], "Deadline: pick the day this is due")
+        self.deadline_btn.setFocusPolicy(Qt.NoFocus)
+        self.deadline_btn.clicked.connect(self.deadline_menu)
+        self.deadline_btn.installEventFilter(self)
+        for b in (self.copy_btn, self.tags_btn, self.remind_btn, self.deadline_btn):
             b.setProperty("row", True)
         if not task["done"]:
             ah.addWidget(self.tags_btn)
             ah.addWidget(self.remind_btn)
+            ah.addWidget(self.deadline_btn)
         acts = [("\u2713 Done" if not task["done"] else "Not done",
                  "Mark it done (the round box, or Ctrl+Enter, does the same)" if not task["done"]
                  else "Back to the open notes", lambda: panel.done_from_keyboard(self))]
@@ -9701,6 +10276,8 @@ class TaskCard(QFrame):
                 b = IconAct("check", C["glimmer"], C["glimmer"], "Done: " + tip)
             elif text == "Later":
                 b = IconAct("timer", C["dim"], C["text"], "Later: " + tip)
+            elif text == "Let go":
+                b = IconAct("balloon", C["dim"], C["text"], "Let go: " + tip)
             else:
                 b = QToolButton()
                 b.setObjectName("act")
@@ -9716,9 +10293,11 @@ class TaskCard(QFrame):
             b.installEventFilter(self)
             ah.addWidget(b)
             self.act_btns.append(b)
+        self.act_btns.append(self.star_btn)
         if not task["done"]:
-            self.act_btns += [b for b in (self.step_btn, self.tags_btn, self.remind_btn) if b is not None]
-            # Tab order: Later, Let go, Delete, Step, Tags, Remind
+            self.act_btns += [b for b in (self.play_btn, self.step_btn, self.tags_btn, self.remind_btn,
+                                          self.deadline_btn) if b is not None]
+            # Tab order: Done, Later, Let go, Delete, Star, Focus, Step, Tags, Remind, Deadline
         self._has_actions = True   # Copy is always there
         self.actions.adjustSize()
         self.actions.hide()
@@ -9773,7 +10352,7 @@ class TaskCard(QFrame):
     MARGIN_LINE, MARGIN_FONT = 16, 12      # flag words and the reminder: one face (Georgia italic), one size
 
     def _kind_words(self):
-        return [] if self.task["done"] else [m for m in self.margin if m[1] != "urgent"]   # urgent: the red bracket
+        return [] if self.task["done"] else self.margin
 
     def _line_mid(self):
         """Middle of the title's first line: the first margin line and the hover buttons line up on it."""
@@ -9835,6 +10414,8 @@ class TaskCard(QFrame):
         tr = self.panel._tree.get(t["id"]) or {}
         if tr.get("kids") and not tr.get("depth"):
             self.margin.append((f"{tr['kids_done']} of {tr['kids']}", "steps", "Steps done"))
+        if t.get("star") and live and not self.panel.starred:      # on the Starred tab it goes without saying
+            self.margin.append(("★ starred", "idea", "On the Starred tab"))
         self._fit_margin()
         stripe = next((kind for k, kind in (("urgent", "urgent"), ("antiglimmer", "anti"), ("distraction", "dist"),
                                             ("glimmer", "glimmer"), ("urge", "urge"), ("idea", "idea"))
@@ -9942,10 +10523,13 @@ class TaskCard(QFrame):
     # ---- behaviour
     def set_active(self, on):
         """Active = you're editing this task: show the details line and the attach hint,
-        and keep the hover buttons out of the way of the text (Alt+Up/Down still reorders)."""
+        and its buttons, on their own line under the text (Alt+Up/Down still reorders)."""
         self._active = on
-        if on:
-            self.actions.hide()
+        if on and getattr(self, "_has_actions", False) and not self.actions.isVisible():
+            self.panel.hide_pills(keep=self)
+            self._place_actions()
+            self.actions.show()
+            self.actions.raise_()
         self.flag_row.setVisible(False)            # tags: the Tags button on the pill (keeps the note narrow)
         self.desc.setVisible(bool(self.desc.toPlainText().strip()))   # older notes' details, if any
         self.attach_hint.setVisible(False)         # paste or drop works anyway; no extra line appearing
@@ -9954,9 +10538,41 @@ class TaskCard(QFrame):
         """Flags for this note, from the pill: a small card of colored chips, tick as many as you like."""
         TagPicker(self).open_at(self.tags_btn.mapToGlobal(QPoint(0, self.tags_btn.height() + 4)))
 
+    def deadline_menu(self):
+        """The day this note is due, from the pill: quick picks or the calendar."""
+        at = self.deadline_btn if self.actions.isVisible() else self.deadline_stat
+        DeadlinePicker(self).open_at(at.mapToGlobal(QPoint(0, at.height() + 4)))
+
+    def set_deadline(self, value):
+        if value:
+            self.task["deadline"] = value
+        else:
+            self.task.pop("deadline", None)
+        self.panel.store.save()
+        self._refresh_deadline()
+
+    def _refresh_deadline(self):
+        value = self.task.get("deadline")
+        ds = self.deadline_stat
+        ds.setVisible(bool(value) and not self.task["done"])
+        if not value:
+            return
+        text = deadline_text(value)
+        hot = text.startswith(("Overdue", "Due today"))
+        ds.setText(text)
+        ds.setToolTip("Deadline. Click to change or remove it")
+        tone = QColor(C["urgent"] if hot else C["accent_text"])
+        tint = lambda a: f"rgba({tone.red()}, {tone.green()}, {tone.blue()}, {a})"
+        ds.setStyleSheet(f"QToolButton#deadlineStat {{ color: {tone.name()}; background: {tint(0.10)}; "
+                         f"border: 1px solid {tint(0.22)}; border-radius: 8px; padding: 0px 7px; "
+                         f"font-size: 10px; font-weight: 600; }} "
+                         f"QToolButton#deadlineStat:hover {{ background: {tint(0.18)}; }}")
+
     def _check_active(self):
         fw = QApplication.focusWidget()
         self.set_active(fw in (self.title, self.desc, *self.fb.values()))
+        if not self._active:
+            self.maybe_hide_pill()
 
     def _to_details(self):
         if self.desc.isVisible():
@@ -10022,7 +10638,7 @@ class TaskCard(QFrame):
     @classmethod
     def guide_x(cls, k):
         """The tree line of level k runs down the middle of that level's ring."""
-        return ROW_MARGIN + 8 + k * cls.IND + (10 if k == 0 else 9)
+        return ROW_MARGIN + RING_GAP + k * cls.IND + (10 if k == 0 else 9)
 
     def _place_fold(self):
         """The hide/show arrow sits just after the title's last word."""
@@ -10101,6 +10717,13 @@ class TaskCard(QFrame):
             fill.setAlphaF(0.6 * self.hover.v)
             p.setBrush(fill)
             p.drawRect(text_side)
+        if self.task["id"] == getattr(self.panel, "_focus_tid", None):   # focusing on this note: tint + bar
+            tint = QColor(C["timer"])
+            tint.setAlphaF(0.12)
+            p.setBrush(tint)
+            p.drawRect(text_side)
+            p.setBrush(QColor(C["timer"]))
+            p.drawRoundedRect(QRectF(ROW_MARGIN + 1, 3, 3, self.height() - 6), 1.5, 1.5)
         tr = self.panel._tree.get(self.task["id"]) or {}
         if tr.get("depth") or tr.get("open"):
             self._paint_guides(p, tr)
@@ -10134,7 +10757,9 @@ class TaskCard(QFrame):
                 self.panel.select_neighbor(self, d)
             return True
         if k in (Qt.Key_Return, Qt.Key_Enter):
-            if mods & Qt.ControlModifier:
+            if mods & Qt.ControlModifier and mods & Qt.ShiftModifier:
+                self.panel.step_add(self.task)
+            elif mods & Qt.ControlModifier:
                 self.panel.done_from_keyboard(self)
             else:
                 self.open_editing()
@@ -10164,6 +10789,8 @@ class TaskCard(QFrame):
         m = QMenu(self)
         m.setStyleSheet(STYLE)
         m.addAction("Edit reminder..." if self.task.get("reminder") else "Remind me...", self._edit_reminder)
+        if not self.task["done"]:
+            m.addAction("Change deadline..." if self.task.get("deadline") else "Deadline...", self.deadline_menu)
         m.addSeparator()
         if self.task.get("attachments"):
             cm = m.addMenu("Copy")
@@ -10184,8 +10811,10 @@ class TaskCard(QFrame):
                 acted.addAction("Undo last record", self._undo_itch_action)
         st, t = self.panel.store, self.task
         m.addSeparator()
+        if self.play_btn is not None:
+            m.addAction("Focus on this", lambda: self.panel.focus_on(t))
         if self.step_btn is not None:
-            m.addAction("Add step", lambda: self.panel.step_add(t))
+            m.addAction("Add step	Ctrl+Shift+Enter", lambda: self.panel.step_add(t))
         if not (t["done"] and not t.get("parent")):
             m.addAction("Make it a step\tAlt+Right", lambda: self.panel.indent(t))
         if t.get("parent"):
@@ -10270,8 +10899,8 @@ class TaskCard(QFrame):
 
     def enterEvent(self, e):
         self.hover.to(1.0)
-        if not self._has_actions or getattr(self, "_active", False):
-            return                      # editing: the buttons would sit on the text you're typing
+        if not self._has_actions:
+            return
         if any(c.pill_in_use() for c in self.panel.live_cards() if c is not self):
             return                      # you're on another note's buttons with the keyboard: leave that one alone
         if QCursor.pos() == self.panel._nav_cursor:
@@ -10289,6 +10918,7 @@ class TaskCard(QFrame):
         super().resizeEvent(e)
         self._fit_margin()              # the title's font is final once it's laid out: realign the margin to it
         if self.actions.isVisible():
+            self._fit_added()
             self._place_actions()
 
     def _place_actions(self):
@@ -10301,14 +10931,48 @@ class TaskCard(QFrame):
         self.actions.adjustSize()
         g = self.geometry()
         h = self.actions.height()
-        y = g.top() + max(0, g.height() - self.outer.contentsMargins().bottom() - h)
+        opening = self._added_to - self.added.height() if self.added.isVisible() else 0   # where the line will end
+        y = g.top() + max(0, g.height() + opening - self.outer.contentsMargins().bottom() - h)
         self.actions.move(g.right() - 6 - self.actions.width(), y)
         self.actions.raise_()
 
+    GROW_MS = 160      # the added line easing open under a hovered note; 0 = at once
+
     def reserve_pill(self, on):
-        """While the buttons show, the note grows a line under its text (when it was added), so they never sit on it."""
-        if self.added.isVisible() != on:
-            self.added.setVisible(on)
+        """While the buttons show, the note grows a line under its text (when it was added), so they never sit on it.
+        The line eases open and shut, so the row slides rather than jumps."""
+        if on:
+            self._fit_added()
+        g = self._grow
+        g.stop()
+        to = self._added_to if on else 0
+        now = self.added.height() if self.added.isVisible() else 0
+        if on and not self.added.isVisible():
+            self.added.setFixedHeight(0)
+            self.added.show()
+        if now == to or not self.GROW_MS or reduced_motion() or not self.isVisible():
+            self.added.setFixedHeight(to or self.added.height())
+            self.added.setVisible(bool(to))
+        else:
+            g.setDuration(self.GROW_MS)
+            g.setStartValue(now)
+            g.setEndValue(to)
+            g.start()
+        if on and self.actions.isVisible():
+            self._place_actions()
+
+    def _fit_added(self):
+        """The time it was added and the buttons share that line; on a narrow row the buttons drop to a line of their own."""
+        h = self.actions.sizeHint().height()
+        two = self.added.sizeHint().width() + 12 + self.actions.sizeHint().width() > self.width() - 6 - self.title.x()
+        self.added.setContentsMargins(0, (h - self.added.fontMetrics().height()) // 2 if two else 0, 0, 0)
+        self.added.setAlignment(Qt.AlignLeft | (Qt.AlignTop if two else Qt.AlignVCenter))
+        self._added_to = 2 * h if two else h
+        if self._grow.state() == QVariantAnimation.Running:
+            if self._grow.endValue():
+                self._grow.setEndValue(self._added_to)
+        else:
+            self.added.setFixedHeight(self._added_to)
 
     def moveEvent(self, e):
         super().moveEvent(e)
@@ -10322,7 +10986,9 @@ class TaskCard(QFrame):
     def maybe_hide_pill(self):
         """Mouse left the note or the pill: hide it, unless it went from one to the other or Tab is on it."""
         try:
-            if not (self.underMouse() or self.actions.underMouse() or self.pill_in_use() or self.hasFocus()):
+            if not (self.underMouse() or self.actions.underMouse() or self.pill_in_use() or self.hasFocus()
+                    or getattr(self, "_active", False)                       # editing it, a step too
+                    or getattr(QApplication.activePopupWidget(), "card", None) is self):   # its Tags or Deadline card
                 self.actions.hide()
         except RuntimeError:
             pass
@@ -10401,6 +11067,10 @@ class TaskCard(QFrame):
             if (obj is self.title and e.key() in (Qt.Key_Return, Qt.Key_Enter) and self.depth and
                     not e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier) and not self.panel.is_filtering()):
                 self.panel.step_enter(self)     # the next step, like a checklist
+                return True
+            if (e.key() in (Qt.Key_Return, Qt.Key_Enter) and e.modifiers() & Qt.ControlModifier
+                    and e.modifiers() & Qt.ShiftModifier):
+                self.panel.step_add(self.task)
                 return True
             if e.key() in (Qt.Key_Return, Qt.Key_Enter) and e.modifiers() & Qt.ControlModifier:
                 self.panel.done_from_keyboard(self)
@@ -11055,6 +11725,22 @@ def line_icon(kind, color, size=26):
             star.quadTo(cx - k, cy + k, cx - r, cy)
             star.quadTo(cx - k, cy - k, cx, cy - r)
             p.drawPath(star)
+    elif kind in ("star", "starfill"):                                      # five points; filled when starred
+        star = QPainterPath()
+        for i in range(10):
+            r = 9.5 if i % 2 == 0 else 4.2
+            a = math.radians(-90 + 36 * i)
+            pt = QPointF(12 + r * math.cos(a), 12.8 + r * math.sin(a))
+            star.moveTo(pt) if i == 0 else star.lineTo(pt)
+        star.closeSubpath()
+        if kind == "starfill":
+            p.setBrush(fill)
+        p.drawPath(star)
+    elif kind == "balloon":                                                 # let go: a balloon drifting off
+        p.drawEllipse(QPointF(12, 8.5), 5.5, 6.5)
+        string = QPainterPath(QPointF(12, 15))
+        string.cubicTo(9.5, 17.5, 14.5, 19, 11.5, 22)
+        p.drawPath(string)
     if crossed:
         p.setPen(QPen(QColor(color), 2.0, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(3.5, 3.5), QPointF(20.5, 20.5))
@@ -11639,6 +12325,18 @@ class ActionPill(QFrame):
         super().showEvent(e)
         self.card.reserve_pill(True)
         self.card.panel.set_pill_owner(self.card)
+        if self.card.GROW_MS and not reduced_motion():          # fades in while the line opens under it
+            fx = QGraphicsOpacityEffect(self)
+            fx.setOpacity(0.0)
+            self.setGraphicsEffect(fx)
+            a = QVariantAnimation(fx)
+            a.setDuration(self.card.GROW_MS)
+            a.setEasingCurve(QEasingCurve.OutCubic)
+            a.setStartValue(0.0)
+            a.setEndValue(1.0)
+            a.valueChanged.connect(fx.setOpacity)
+            a.finished.connect(lambda: self.graphicsEffect() is fx and self.setGraphicsEffect(None))
+            a.start()
         QTimer.singleShot(0, self.card.panel._update_more)     # the "more" pill steps aside for it
 
     def hideEvent(self, e):
@@ -11690,7 +12388,7 @@ def paint_material(p, r, radius, shadow, border=None):
     paint_shadow(p, r, radius, shadow)
     p.setBrush(QColor(C["bg"]))
     p.drawRoundedRect(r, radius, radius)
-    edge = QColor(border) if border is not None else veil(26 if theme_dark() else 40)
+    edge = QColor(border) if border is not None else veil(58 if theme_dark() else 40)
     if border is not None:
         edge.setAlpha(170)
     p.setBrush(Qt.NoBrush)
@@ -12194,8 +12892,12 @@ class ImportantWorkShelf(QFrame):
 
 
 # ---------------------------------------------------------------- main panel
+STAR_TAB = "__star__"      # the Starred tab's data: not a list id
+
+
 class Panel(RoundedWindow):
     CARD_BATCH = 40
+    starred = False     # on the Starred tab: the starred notes of every list, each with the notes above it
 
     def __init__(self, store, bubble):
         # a normal window (not Qt.Tool), so it shows in Alt+Tab and on the taskbar while it's open
@@ -12537,8 +13239,11 @@ class Panel(RoundedWindow):
 
     # ---- tabs
     def refresh_tabs(self):
+        has_star = any(t.get("star") for t in self.store.all_tasks())
+        if self.starred and not has_star:            # the last star went: back to the list you were in
+            self.starred = False
         signature = (tuple((l["id"], l["name"]) for l in self.store.lists),
-                     self.store.settings["current"])
+                     self.store.settings["current"], has_star, self.starred)
         if getattr(self, "_tabs_signature", None) == signature:
             self.refresh_tab_counts()
             return
@@ -12546,25 +13251,38 @@ class Panel(RoundedWindow):
         while self.tabs.count():
             self.tabs.removeTab(0)
         cur = 0
-        for i, l in enumerate(self.store.lists):
-            self.tabs.addTab(l["name"])
+        for l in self.store.lists:
+            i = self.tabs.addTab(l["name"])
             self.tabs.setTabData(i, l["id"])
             if l["id"] == self.store.settings["current"]:
                 cur = i
-        self.tabs.setCurrentIndex(cur)
+            if i == 0 and has_star:                  # Starred sits right after Inbox
+                self.tabs.addTab("\u2605 Starred")
+                self.tabs.setTabData(1, STAR_TAB)
+        self.tabs.setCurrentIndex(1 if self.starred else cur)
         self.tabs.blockSignals(False)
-        multi = len(self.store.lists) > 1        # one list needs no tabs; + adds a second one
+        multi = self.tabs.count() > 1            # one list needs no tabs; + adds a second one
         self.tabs.setVisible(multi)
         self.refresh_tab_counts()
         self._tabs_signature = signature
 
     def refresh_tab_counts(self):
-        for i, l in enumerate(self.store.lists):
-            if i < self.tabs.count():
+        by_id = {l["id"]: l for l in self.store.lists}
+        for i in range(self.tabs.count()):
+            lid = self.tabs.tabData(i)
+            if lid == STAR_TAB:
+                n = sum(1 for t in self.store.all_tasks() if t.get("star") and not t["done"])
+                self.tabs.setTabToolTip(i, "Starred: the notes you starred in every list, with the notes "
+                                           "they sit under. Changes here change the note itself.")
+            elif lid in by_id:
+                l = by_id[lid]
                 n = sum(1 for t in l["tasks"] if not t["done"] and not t.get("parent"))
                 self.tabs.setTabText(i, l["name"])
                 self.tabs.setTabToolTip(i, "Inbox: quick notes and drops on the circle land in the first tab. "
                                            "Drag another tab here to change it." if i == 0 else "")
+            else:
+                continue
+            if True:
                 # the count is a separate pill beside the name, so it never reads as part of it
                 badge = self.tabs.tabButton(i, QTabBar.RightSide)
                 if not n:                            # no pill at all, so the tab doesn't keep its width
@@ -12585,13 +13303,21 @@ class Panel(RoundedWindow):
 
     def _tab_changed(self, i):
         if i >= 0:
-            self.store.set_current(self.tabs.tabData(i))
+            lid = self.tabs.tabData(i)
+            self.starred = lid == STAR_TAB
+            if not self.starred:
+                self.store.set_current(lid)
+            self._tabs_signature = None
             self.refresh_later()
 
     def _tab_moved(self, frm, to):
-        ls = self.store.lists
-        ls.insert(to, ls.pop(frm))
+        """Lists follow the tabs; the Starred tab isn't a list, so it goes back after Inbox."""
+        by_id = {l["id"]: l for l in self.store.lists}
+        order = [by_id[self.tabs.tabData(i)] for i in range(self.tabs.count()) if self.tabs.tabData(i) in by_id]
+        self.store.data["lists"][:] = order
         self.store.save()
+        self._tabs_signature = None
+        QTimer.singleShot(0, self.refresh_tabs)
 
     def _step_tab(self, d):
         if self.tabs.count():
@@ -12612,7 +13338,7 @@ class Panel(RoundedWindow):
         return next(l for l in self.store.lists if l["id"] == lid)
 
     def _rename_list(self, i):
-        if i < 0:
+        if i < 0 or self.tabs.tabData(i) == STAR_TAB:
             return
         l = self._list_at(i)
         name = self._ask_name("Rename list", l["name"])
@@ -12622,7 +13348,7 @@ class Panel(RoundedWindow):
 
     def _tab_menu(self, pos):
         i = self.tabs.tabAt(pos)
-        if i < 0:
+        if i < 0 or self.tabs.tabData(i) == STAR_TAB:
             return
         l = self._list_at(i)
         m = QMenu(self)
@@ -12732,12 +13458,12 @@ class Panel(RoundedWindow):
             hl.setContentsMargins(2, 0, 0, 0)
             sec = QToolButton()
             sec.setObjectName("section")
-            sec.setText(("\u25BE " if show else "\u25B8 ") + f"{title} ({sum(1 for t in items if not t.get('parent'))})")
+            sec.setText(("\u25BE " if show else "\u25B8 ") + f"{title} ({sum(1 for t in items if not self._tree.get(t['id'], {}).get('depth'))})")
             sec.setToolTip("Show" if not show else "Hide")
             sec.clicked.connect(lambda _=False, k=key: self._toggle_section(k))
             hl.addWidget(sec)
             hl.addStretch(1)
-            if key == "done":
+            if key == "done" and not self.starred:     # Clear acts on one list; not from Starred
                 clr = QToolButton()
                 clr.setObjectName("link")
                 clr.setText("Clear")
@@ -12880,7 +13606,7 @@ class Panel(RoundedWindow):
         """A note left the main list (deleted, let go, done, Later): take its card out in place instead of
         rebuilding every card, then rebuild only the small Later / Completed sections. Returns False when a full
         refresh is needed instead (searching, or the list would become empty)."""
-        if self.is_filtering() or self._main_pending or any(s["pending"] for s in self._section_batches):
+        if self.starred or self.is_filtering() or self._main_pending or any(s["pending"] for s in self._section_batches):
             return False
         main = self._main_cards()
         gone = self._cards_of(task, main)
@@ -12908,8 +13634,8 @@ class Panel(RoundedWindow):
 
     def fast_add(self, task):
         """A new note in the current list: insert just its card where it belongs (no full rebuild)."""
-        if (self.is_filtering() or self._main_pending or any(s["pending"] for s in self._section_batches)
-                or task not in self.store.tasks):
+        if (self.starred or self.is_filtering() or self._main_pending
+                or any(s["pending"] for s in self._section_batches) or task not in self.store.tasks):
             return False
         main = self._main_cards()
         order = self.open_in_order()
@@ -13045,21 +13771,46 @@ class Panel(RoundedWindow):
     def open_in_order(self):
         """Open notes of the current list as shown: urgent first, then the Sort setting (default: stored order,
         newest on top), each followed by its steps."""
+        if self.starred:
+            return self._star_walk(lambda t: not t["done"] and not t.get("later"), sort=True)
         return self._walk(self.sorted_notes(t for t in self.store.tasks
                                             if not t["done"] and not t.get("later") and not t.get("parent")))
 
     def later_in_order(self):
+        if self.starred:
+            return self._star_walk(lambda t: t.get("later") and not t["done"])
         return self._walk([t for t in self.store.tasks if t.get("later") and not t["done"] and not t.get("parent")])
 
     def done_in_order(self):
+        if self.starred:
+            return self._star_walk(lambda t: t["done"])
         return self._walk([t for t in self.store.tasks if t["done"] and not t.get("parent")])
+
+    def starred_tops(self):
+        """(note, its list) for each starred note; one under a starred note shows with that note, not twice."""
+        return [(t, l) for l in self.store.lists for t in l["tasks"]
+                if t.get("star") and not any(a.get("star") for a in self.store.ancestors(t, l["tasks"]))]
+
+    def _star_walk(self, keep, sort=False):
+        """Starred notes that pass keep, each with its steps, and above it the list and notes it sits under."""
+        tops = [(t, l) for t, l in self.starred_tops() if keep(t)]
+        if sort:
+            rank = {t["id"]: i for i, t in enumerate(self.sorted_notes(t for t, _ in tops))}
+            tops.sort(key=lambda tl: rank[tl[0]["id"]])
+        multi = len(self.store.lists) > 1
+        out = []
+        for t, l in tops:
+            out += self._walk([t], l["tasks"])
+            path = self.store.path_text(t, l["tasks"])
+            self._tree[t["id"]]["crumb"] = " \u203a ".join(x for x in (l["name"] if multi else "", path) if x)
+        return out
 
     _tree = {}      # note id -> how its row sits in the tree (depth, lines to draw, steps done), set by _walk()
 
-    def _walk(self, tops):
+    def _walk(self, tops, tasks=None):
         """Each note, then its steps in stored order (theirs under them), skipping the steps of a hidden one."""
         kids, out = {}, []
-        for t in self.store.tasks:
+        for t in (self.store.tasks if tasks is None else tasks):
             if t.get("parent"):
                 kids.setdefault(t["parent"], []).append(t)
 
@@ -13110,8 +13861,13 @@ class Panel(RoundedWindow):
         f, q = self.filters, self.find_edit.text().strip().lower()
         show = f["show"]
         cutoff = (datetime.now() - timedelta(days=f["days"])).isoformat(timespec="seconds") if f["days"] else ""
-        out = []
-        for t in self.store.tasks:
+        out, where = [], {}
+        for top, l in (self.starred_tops() if self.starred else []):
+            for x in self.store.subtree(top, l["tasks"]):
+                where[x["id"]] = l["tasks"]
+        pool = [x for l in self.store.lists for x in l["tasks"] if x["id"] in where] if self.starred \
+            else self.store.tasks
+        for t in pool:
             state = "done" if t["done"] else "later" if t.get("later") else "open"
             if show == "active" and state == "done":
                 continue
@@ -13127,7 +13883,7 @@ class Panel(RoundedWindow):
         tasks = self.store.tasks
         for t in out:
             self._tree[t["id"]] = {"depth": 0, "rails": [], "last": False, "kids": 0, "kids_done": 0, "hidden": 0,
-                                   "open": False, "up": [], "crumb": self.store.path_text(t, tasks)}
+                                   "open": False, "up": [], "crumb": self.store.path_text(t, where.get(t["id"], tasks))}
         return self.sorted_notes(out)
 
     def toggle_search(self, show=None):
@@ -13430,6 +14186,20 @@ class Panel(RoundedWindow):
             self.refresh_later(task["id"], select=True)
         self._push_undo("\U0001F552  Out of sight till later" if on else "Back in the list", undo)
 
+    def set_star(self, task, on):
+        """Star: the note shows on the Starred tab (after Inbox) with the notes it sits under. It stays where it is."""
+        def apply(v, **extra):
+            if v:
+                task["star"] = True
+            else:
+                task.pop("star", None)
+            self.store.log_event("star_on" if v else "star_off", task, **extra)
+            self.store.save()
+            self.refresh_tabs()
+            self.refresh_later(task["id"], select=True)
+        apply(on)
+        self._push_undo("★  Starred" if on else "Unstarred", lambda: apply(not on, undo=True))
+
     def move_to_list(self, task, target, card=None):
         if card is not None and card.hasFocus():
             cards = [c for c in self._nav_cards if c.isVisible()]
@@ -13633,6 +14403,11 @@ class Panel(RoundedWindow):
         if not tm:
             self.timer_row.hide()
             return
+        fid = tm.state.get("task") if tm.running and tm.kind == "focus" else None   # the note a ▶ round is on
+        if fid != getattr(self, "_focus_tid", None):
+            self._focus_tid = fid
+            for c in self.findChildren(TaskCard):
+                c.update()
         fm, bm = self._mins("focus"), self._mins("break")
         if tm.running and tm.kind == "break":
             on = tm.state.get("on")
@@ -13714,6 +14489,8 @@ class Panel(RoundedWindow):
                 return
             t = self.store.new_task(clean, source="list", log=False)
             t.update(self._quick_flags())
+            if self.starred:                         # typed on Starred: it stays in view, starred
+                t["star"] = True
             if self.quick_reminder or inline_reminder:
                 t["reminder"] = (self.quick_reminder or inline_reminder).copy()
             self.store.log_captured(t)
@@ -13863,6 +14640,9 @@ class Panel(RoundedWindow):
     MAX_DEPTH = 2           # a note, its steps, their steps: three levels
 
     def _can_move(self):
+        if self.starred:
+            self._toast("Starred shows notes from every list: move them in their own tab", ms=3000)
+            return False
         if self.store.settings.get("sort", "manual") != "manual" or self.is_filtering():
             self._toast("Moving works in My order with no search or filter", ms=3000)
             return False
@@ -13960,6 +14740,15 @@ class Panel(RoundedWindow):
             return
         self.place(task, self.store.parent_of(par), after=par, edit=edit)
 
+    def focus_on(self, task):
+        """A note's ▶: a focus round on that note (the usual focus length)."""
+        if not self.timer:
+            return
+        if self.timer.kind == "focus" and (self.timer.state or {}).get("task") == task["id"]:
+            self._toast("Already focusing on this note", ms=2500)
+            return
+        self.timer.start(self._mins("focus"), "focus", task=task)
+
     def step_add(self, parent, after=None):
         """A new empty step under the note (after a given step, else at the end), ready to type."""
         st = self.store
@@ -14049,7 +14838,7 @@ class Panel(RoundedWindow):
                 y = (above.geometry().bottom() + below.y()) // 2
             else:
                 y = below.y() if below else (above.geometry().bottom() if above else 0)
-            x = (rows[0].x() if rows else 0) + ROW_MARGIN + 8 + dep * TaskCard.IND
+            x = (rows[0].x() if rows else 0) + ROW_MARGIN + RING_GAP + dep * TaskCard.IND
             line.setGeometry(x, y - 1, max(20, self.list.width() - x - 8), 2)
             line.show()
             line.raise_()
@@ -14249,7 +15038,8 @@ class Panel(RoundedWindow):
         self.refresh_later()
 
     def update_counts(self):
-        open_t = [t for t in self.store.tasks if not t["done"] and not t.get("later") and not t.get("parent")]
+        open_t = ([t for t, _ in self.starred_tops() if not t["done"] and not t.get("later")] if self.starred else
+                  [t for t in self.store.tasks if not t["done"] and not t.get("later") and not t.get("parent")])
         g = sum(1 for t in open_t if t.get("urgent"))
         u = sum(1 for t in open_t if t.get("urge"))
         d = sum(1 for t in open_t if t.get("distraction"))
@@ -14258,7 +15048,7 @@ class Panel(RoundedWindow):
         self.copy_all_btn.setToolTip(("Copy the matching notes as a list (Ctrl+Shift+C)" if filtering else
                                      "Copy all open notes as a list, details under each (Ctrl+Shift+C)"))
         self.copy_all_btn.setVisible(bool(self.filtered_tasks()) if filtering else bool(open_t))
-        self.status.setText(f"{len(open_t)} parked" + (f" \u00B7 {g} urgent" if g else "")
+        self.status.setText(f"{len(open_t)} {'starred' if self.starred else 'parked'}" + (f" \u00B7 {g} urgent" if g else "")
                             + (f" \u00B7 {u} itch{'es' if u != 1 else ''}" if u else "")
                             + (f" \u00B7 {d} distraction{'s' if d != 1 else ''}" if d else ""))
 
@@ -14380,7 +15170,8 @@ class Panel(RoundedWindow):
     def _fingerprint(self):
         """Everything the cards are built from. If it's unchanged, the cards on screen are still right."""
         st = self.store.settings
-        return json.dumps([self.store.tasks, st.get("current"), st.get("flags_on"), st.get("open_section"),
+        stars = [x for t, l in self.starred_tops() for x in self.store.subtree(t, l["tasks"])]
+        return json.dumps([self.store.tasks, self.starred, stars, st.get("current"), st.get("flags_on"), st.get("open_section"),
                            st.get("flag_order"), st.get("custom_flags"),
                            st.get("sort"), self.find_edit.text(), self.filters], sort_keys=True, default=str)
 
@@ -16397,7 +17188,7 @@ class Onboarding(RoundedWindow):
         r.addWidget(self.google_b)
         r.addWidget(self.google_status, 1)
         self.google_note = QLabel("Google shows a warning first because the app is new. "
-                                  "Click Advanced, then Go to Park That Thought.", box)
+                                  "Click Advanced, then Go to Headroom.", box)
         self.google_note.setObjectName("obNote")
         self.google_note.setWordWrap(True)
         bl.addWidget(self.google_note)
@@ -16937,7 +17728,7 @@ def google_client(folder):
 # Google treats a desktop app's client secret as public (every copy ships it); PKCE and each user's consent
 # protect accounts. The exe keeps bundled files in sys._MEIPASS.
 GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET = google_client(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-# drive.appdata (non-sensitive): PTT's own hidden Drive folder, for phone sync later. Asked now so people consent once.
+# drive.appdata (non-sensitive): PTT's own hidden Drive folder, where DriveSync keeps the notes your PCs share.
 GOOGLE_CALENDAR_SCOPE = " ".join(("https://www.googleapis.com/auth/calendar.events",
                                   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
                                   # label colors (calendars.get); an older sign-in without it gets colorId colors
@@ -24895,6 +25686,10 @@ class SettingsWindow(QWidget):
                   self._button("Open...", ctx.open_analyses))
         self._row(gl, "Data folder", str(DATA_DIR), self._button("Open", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(DATA_DIR)))))
+        sync = getattr(QApplication.instance(), "_drive_sync", None)
+        if sync is not None:
+            self._row(gl, "Sync notes", "Notes, tabs and settings on every PC signed in to the same Google account. "
+                      + sync.status, self._button("Sync now", sync.tick))
         v.addStretch(1)
         return area
 
@@ -25583,6 +26378,7 @@ def main():
     holder["quickbox"] = quickbox
     app._note_alarms = NoteAlarmManager(store, app, panel.refresh_later, bubble, panel)
     app._phone_sync = PhoneSync(store, panel.refresh_later, app)
+    app._drive_sync = DriveSync(store, panel.refresh_later, app)
     for key, w in (("opacity_circle", bubble), ("opacity_quick", quickbox), ("opacity_list", panel)):
         w.setWindowOpacity(max(0.3, min(1.0, float(setting(key, 1.0)))))
     hotkeys.quick.connect(quickbox.toggle)
@@ -25832,7 +26628,7 @@ def main():
         panel.hide()
         chosen = next_focus_confirmation["minutes"]
         next_focus_confirmation["minutes"] = None
-        if tag_ok():
+        if tag_ok() and not (timer.state or {}).get("task"):      # a note's ▶ already says what it's for
             lead = f"Focus started for {fmt_min(chosen)} min." if chosen else ""
             QTimer.singleShot(300, lambda: nudges.ask_tag("focus", lead) if timer.kind == "focus" else None)
         elif chosen:

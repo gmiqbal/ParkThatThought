@@ -34,7 +34,7 @@ I made it in grad school. I was juggling courses, a research project, chores and
 - **Anyone who works in focus sessions** (Pomodoro or similar): students, researchers, programmers, writers.
 - **People who want privacy on screen.** The cloud only shows a number, the quick note box never shows your other notes, and the app is hidden from screen shares and screenshots. Safe in a meeting, on a call or next to your boss.
 
-It is not a full task manager. There's no account, no cloud sync and no phone app. It's one small Windows app that keeps everything on your PC.
+It is not a full task manager. There's no account of its own and no phone app. It's one small Windows app that keeps everything on your PC; connect Google and your notes also sync between your PCs.
 
 ## Install (about 2 minutes)
 
@@ -156,7 +156,9 @@ System, Light or Dark theme (System follows Windows). The white glossy thought c
 | Start a focus round | **Focus** in the list. |
 | Park a file, image or link | Drag it onto the cloud, or `Ctrl+V` a screenshot in the quick note. |
 | Use a parked file | Drag it out of the note, or hover it and click copy. |
+| Give a note a deadline | Hover it and click the calendar: **Today**, **Tomorrow**, **Next week** or any day. It shows under the note, red once due. |
 | Break a note into steps | Hover it and click **+**; `Enter` adds the next step. `Alt+Right` / `Alt+Left`, or drag it by its dots, to make a note a step or take it out. |
+| Focus on today's few | Hover a note or step and click the star. The **Starred** tab after Inbox shows them from every list, with the notes above them; Done or edits there change the note itself. |
 | Copy a note into a message | Hover it and click the copy icon, or select it and press `Ctrl+C`. |
 | Block apps for a while | The no-entry button at the top of the full list (the time left counts down above it while blocking), or right-click the cloud > **Block apps**. Pick which ones in Settings > **App blocker**. Press and hold the cloud to unblock one for a few minutes. |
 | Get help | **?** in the list: how it works and the welcome tour. |
@@ -166,10 +168,10 @@ Everything works from the keyboard.
 
 ## Privacy
 
-- **Your notes stay on your PC**, in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`. No account, no server, no tracking.
+- **Your notes stay on your PC**, in `%LOCALAPPDATA%\ParkThatThought\parking_lot_data`. No account, no server, no tracking. If you connect Google, a copy also goes to Headroom's hidden folder in your own Google Drive so your PCs stay in sync (it can't see any other file in your Drive).
 - **Hidden from screen share and screenshots** by default (Zoom, Teams, Meet, OBS, Snipping Tool). You can turn this off.
 - **App tracking during focus rounds** (on by default, turn it off in Settings > Focus & breaks) notes which app is in front so the end-of-round card can ask which ones distracted you. It never leaves your PC.
-- **The internet is used only for:** downloading, updates (**Restart / update**, and the automatic check unless you turn it off), and, if you turn them on, Google Calendar, phone alerts through ntfy.sh (timer messages only, never your notes) and, if you set up the phone app, sync of your open notes with your own Google account (Settings > Focus & breaks > Phone app link).
+- **The internet is used only for:** downloading, updates (**Restart / update**, and the automatic check unless you turn it off), and, if you turn them on, Google Calendar and note sync, phone alerts through ntfy.sh (timer messages only, never your notes) and, if you set up the phone app, sync of your open notes with your own Google account (Settings > Focus & breaks > Phone app link).
 - **Copy for AI** only copies text to your clipboard. You decide where to paste it.
 
 ## Updating
